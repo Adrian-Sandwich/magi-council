@@ -54,8 +54,10 @@ python3.14 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
 Per-OS shortcuts:
 
-- **Windows**: `debate-mcp\bin\start-magi.bat` starts the portable Postgres
-  (if not running), migrates, and opens relay + UI in their own windows.
+- **Windows**: double-click `Iniciar MAGI.bat` in the repository root. It
+  starts portable Postgres (if needed), migrates, starts relay + UI in the
+  background, and opens your browser. Logs are in `debate-mcp/logs/`.
+  `debate-mcp\bin\start-magi.bat` also uses this launcher.
   `debate-mcp\bin\stop-magi.bat` shuts everything down.
 - **macOS/Linux**: `.venv/bin/python relay.py` and `.venv/bin/python magi_ui.py`
   (daemonize them as you like; `launchd/install.sh` is the macOS way).
@@ -189,15 +191,18 @@ The memory roadmap and its known limits live in `docs/memory-evolution.md`.
 
 ### Switching repo or working folder
 
-The **"repo folder for production runs"** field under the box: paste a path
-(`C:\src\my-repo`) and that query (only that one) works on that repo — CLI
-heads investigate it with cwd there. Without a repo, decisions use the
+The **Repository** field under the box: paste a path (`C:\src\my-repo`)
+or browse and click **use this folder**. Selecting a folder prepares a new
+question, even when viewing a closed decision. The intent line shows its
+target before sending; CLI heads investigate with cwd there. Repository
+selection alone requests analysis. Without a repo, decisions use the
 system's repo (this one) or the relay's default (`DEBATE_DEFAULT_CWD`).
 
 ### Production when a repo is selected
 
-With a repo selected, your query is a **plan for the system to execute**. The
-UI announces that intent before sending:
+With a repo selected, check **Implement the approved plan** to make your
+query a **plan for the system to execute**. The UI announces that intent
+before sending; changing repositories resets this option:
 
 1. The council **deliberates the plan** (like any decision).
 2. If approved, the **executor** (the seat with `"executor": true` in
@@ -214,9 +219,10 @@ UI announces that intent before sending:
    rejection or later changes → **MERGE PENDING**, with the reason in the
    journal.
 
-Without a repo, a decision is only **decided**; with a repo, it's also
-**done**. The conditions from `conditional` votes in the approved round are
-preserved for the executor, including the majority's. If execution fails, it
+Without the implementation option, a decision is only **decided**; with
+that option and a repo, it's also **done**. The conditions from `conditional`
+votes in the approved round are preserved for the executor, including the
+majority's. If execution fails, it
 waits for an explicit retry; failures are never deleted from the journal.
 
 Worktrees are kept in `<git-common-dir>/magi-worktrees/` for inspection and

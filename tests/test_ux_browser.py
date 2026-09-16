@@ -133,15 +133,49 @@ def test_composer_targets_actions_and_preserves_failed_drafts(page):
     assert len(sent) == 2  # New question prepares a draft; it never sends.
     assert page.locator("#c-send").inner_text() == "Ask council"
     page.locator("#c-repo").fill("C:/work/example")
+    assert page.locator("#c-send").inner_text() == "Ask council"
+    page.locator("#c-production").check()
     assert page.locator("#c-send").inner_text() == "Start production"
     page.locator("#c-send").click()
     page.wait_for_function("!document.getElementById('c-send').disabled")
     assert sent[-1]["force_new"] is True
     assert "decision_id" not in sent[-1]
     assert sent[-1]["artifact"] == "C:/work/example"
+    assert sent[-1]["production"] is True
     page.evaluate("window.feed.onerror()")
     assert page.locator("#c-send").is_disabled()
     assert not errors
+
+
+@pytest.mark.parametrize("browse", [False, True])
+def test_repository_selection_after_closed_decision_starts_analysis(page, browse):
+    data = snapshot("closed")
+    data["decisions"][0]["artifact"] = "C:/work/magi"
+    feed(page, data)
+    assert page.locator("#c-send").inner_text() == "Continue this decision"
+    assert "C:/work/magi" in page.locator("#c-intent").inner_text()
+    if browse:
+        page.route("**/fs", lambda route: route.fulfill(
+            content_type="application/json", body=json.dumps({
+                "path": "C:/work/cutulu", "parent": "C:/work", "dirs": []})))
+        page.locator("#c-browse").click()
+        page.locator("#fs-use").click()
+    else:
+        page.locator("#c-repo").fill("C:/work/cutulu")
+    page.locator("#c-input").fill("Analyze this repository")
+    assert "C:/work/cutulu" in page.locator("#c-intent").inner_text()
+    sent = []
+
+    def receive(route):
+        sent.append(route.request.post_data_json)
+        route.fulfill(status=201, content_type="application/json",
+                      body='{"action":"opened","decision_id":5,"production":false}')
+
+    page.route("**/message", receive)
+    page.locator("#c-send").click()
+    page.wait_for_function("document.getElementById('c-status').textContent.includes('#5 opened')")
+    assert sent == [{"mode": "council", "body": "Analyze this repository",
+                     "force_new": True, "artifact": "C:/work/cutulu", "production": False}]
 
 
 def test_sound_transition_dedup_keyboard_and_mobile(page):

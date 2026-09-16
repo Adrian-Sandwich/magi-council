@@ -393,8 +393,10 @@ function renderIntent(d) {
     txt = "↳ Enter talks to the three heads in the open thread — no vote, just their takes.";
   } else if (!d) {
     txt = repo
-      ? `↳ Enter opens a PRODUCTION decision on ${repo} — the council votes your plan, an executor implements it there, the council reviews the diff.`
-      : "↳ Enter opens a NEW decision — the council investigates and votes. Put a repo folder below to also have the approved plan executed there.";
+      ? document.getElementById("c-production").checked
+        ? `↳ Enter opens a PRODUCTION decision on ${repo} — the approved plan will be implemented, reviewed and merged.`
+        : `↳ Enter asks the council to analyze ${repo}.`
+      : "↳ Enter opens a NEW decision using the default repository. Choose a repository below to analyze another project.";
   } else if (d.status === "open") {
     txt = `↳ Enter adds CONTEXT to #${d.id} — the heads read it on their next turn (${d.round}° round).`;
   } else if (d.status === "split") {
@@ -414,6 +416,7 @@ function renderIntent(d) {
   } else {
     txt = `↳ Enter continues #${d.id} in the same thread — previous reasoning and memory stay attached. Use New question for a separate decision.`;
   }
+  if (d && uiMode === "council") txt += ` Repository: ${d.artifact || "default (no folder selected)"}.`;
   el.textContent = txt;
   // acciones del STALEMATE: distinguir "desacuerdo real" de "falta info".
   // Con info en la mezcla no hubo choque de criterio: las cabezas pidieron
@@ -457,11 +460,13 @@ function render() {
   const newQuestion = uiMode === "council" && !active;
   document.querySelector(".composer-opts").hidden = !newQuestion;
   document.getElementById("repo-help").hidden = !newQuestion;
+  document.getElementById("production-option").hidden = !newQuestion;
   if (!newQuestion) document.getElementById("fs-panel").hidden = true;
   const repo = document.getElementById("c-repo").value.trim();
+  document.getElementById("c-production").disabled = !repo;
   const sendButton = document.getElementById("c-send");
   sendButton.textContent = sending ? "Sending…" : uiMode === "chat" ? "Send message"
-    : newQuestion ? (repo ? "Start production" : "Ask council")
+    : newQuestion && !d ? (repo && document.getElementById("c-production").checked ? "Start production" : "Ask council")
     : d.status === "closed" ? "Continue this decision"
     : d.status === "split" ? (replyAction === "resume" ? "Continue discussion" : "Close with my ruling") : "Add context";
   document.getElementById("sa-segui").setAttribute("aria-pressed", String(replyAction === "resume"));
@@ -501,7 +506,16 @@ document.getElementById("sa-ruling").addEventListener("click", () => {
 });
 
 // --- toggle production: el repo y la explicación sólo aparecen cuando aplica
-document.getElementById("c-repo").addEventListener("input", render);
+function repositoryChanged() {
+  newDraft = true;
+  document.getElementById("c-production").checked = false;
+  render();
+}
+document.getElementById("c-repo").addEventListener("input", repositoryChanged);
+document.getElementById("c-production").addEventListener("change", () => {
+  newDraft = true;
+  render();
+});
 
 // --- mini-explorador de carpetas: elegir el repo sin tipear paths
 let fsCurrent = null;
@@ -555,7 +569,7 @@ document.getElementById("fs-up").addEventListener("click", async () => {
 document.getElementById("fs-use").addEventListener("click", () => {
   document.getElementById("c-repo").value = fsCurrent;
   document.getElementById("fs-panel").hidden = true;
-  render();
+  repositoryChanged();
 });
 
 async function abortDecision() {
@@ -619,11 +633,11 @@ async function send(forceNew = false) {
       payload.force_new = true;
     }
   }
-  // con repo, production va explícito: lo aprobado se ejecuta ahí
+  // Repository context is independent of permission to execute a plan.
   const repo = document.getElementById("c-repo").value.trim();
   if (uiMode === "council" && repo && (payload.force_new || forceNew)) {
     payload.artifact = repo;
-    payload.production = true;
+    payload.production = document.getElementById("c-production").checked;
   }
   if (forceNew) payload.force_new = true;
   sending = true;

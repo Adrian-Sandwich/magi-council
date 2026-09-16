@@ -618,6 +618,7 @@ button:disabled { opacity: .45; cursor: default; }
 .composer .composer-opts { margin-top: 10px; font-size: 12px; }
 .composer .composer-opts #c-repo { padding: 9px; min-width: 0; font-size: 12px; color: #f2e3d0; }
 #repo-help { font-size: 11px; color: #c4aa89; line-height: 1.5; }
+#production-option { font-size: 12px; color: #c4aa89; line-height: 1.5; }
 .send-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 12px; }
 .send-row span { font-size: 11px; color: #b6a58f; }
 #c-send { background: #ff8d00; color: #100a02; font-weight: bold; min-width: 160px; }
