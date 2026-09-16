@@ -61,12 +61,10 @@ def test_parse_vote_case_insensitive():
     assert apihead.parse_vote("position: YES\nok")["position"] == "yes"
 
 
-def test_parse_vote_sin_tag_cae_a_info_con_texto_crudo():
-    """El voto nunca se pierde: sin tag parseable cae a 'info' y el
-    razonamiento queda entero en el journal para que un humano lo lea."""
-    v = apihead.parse_vote("Creo que sí pero no estoy seguro.")
-    assert v["position"] == "info"
-    assert "no estoy seguro" in v["body"]
+@pytest.mark.parametrize('text', ['', 'Creo que sí.', 'POSITION: yes|no|conditional|info'])
+def test_parse_vote_requires_explicit_vote(text):
+    with pytest.raises(ValueError, match='POSITION'):
+        apihead.parse_vote(text)
 
 
 # ------------------------------------------------------------ chat

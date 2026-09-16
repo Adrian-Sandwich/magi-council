@@ -104,10 +104,13 @@ def msg(id, thread="t", author="kimi", kind="critica", artifact=None):
 
 
 def _isolate(monkeypatch, tmp_path):
+    monkeypatch.setattr(relay, "LOG_DIR", tmp_path)
     monkeypatch.setattr(relay, "STATE_PATH", tmp_path / "relay_state.json")
     monkeypatch.setattr(relay, "EVENTS_PATH", tmp_path / "events.jsonl")
     monkeypatch.setattr(relay, "HEARTBEAT_PATH", tmp_path / "hb.json")
     relay._inflight.clear()
+    relay._failed_turns.clear()
+    relay._pending_turn_errors.clear()
 
 
 def _capture_trigger(monkeypatch, calls):
@@ -457,11 +460,14 @@ def test_decision_cerrada_no_dispara(fired_magi):
     assert fired_magi == []
 
 
-def test_tope_de_disparos_por_decision(fired_magi):
+def test_tope_de_disparos_por_decision(fired_magi, monkeypatch):
+    errors = []
+    monkeypatch.setattr(relay.turn_errors, 'record', lambda *args: errors.append(args))
     state = fresh_state()
     state["threads"]["d-42"] = {"triggers": relay.MAX_TRIGGERS_PER_DECISION, "cwd": "/tmp"}
     relay.process_cycle(FakeConn([], decisions=[mk_decision_row()]), state)
     assert fired_magi == []
+    assert {args[2] for args in errors} == {'melchior', 'balthasar', 'casper'}
 
 
 def test_turno_de_decision_que_no_arranca_queda_pendiente(fired_magi, monkeypatch):
@@ -555,7 +561,7 @@ def test_asiento_api_dispara_turno_api_sin_proceso(fired_magi, monkeypatch):
 
     recorded = {}
 
-    def fake_record(conn, decision_id, author, position, body, conditions=None):
+    def fake_record(conn, decision_id, author, position, body, conditions=None, expected_round=None):
         recorded.update({
             "decision_id": decision_id, "author": author,
             "position": position, "body": body,
@@ -673,7 +679,7 @@ def test_cabeza_cli_inline_parsea_el_voto_de_stdout(fired_magi, monkeypatch, tmp
     ])
     recorded = {}
 
-    def fake_record(conn, decision_id, author, position, body, conditions=None):
+    def fake_record(conn, decision_id, author, position, body, conditions=None, expected_round=None):
         recorded.update(decision_id=decision_id, author=author,
                         position=position, body=body)
         return {"action": "wait"}, 1
@@ -682,7 +688,7 @@ def test_cabeza_cli_inline_parsea_el_voto_de_stdout(fired_magi, monkeypatch, tmp
     monkeypatch.setattr(relay, "connect", lambda: FakeConn([]))
     monkeypatch.setattr(threading, "Thread", _SyncThread)
 
-    relay.process_cycle(FakeConn([], decisions=[mk_decision_row()]), fresh_state())
+    relay.process_cycle(FakeConn([], decisions=[mk_decision_row(heads=['melchior'])]), fresh_state())
 
     assert recorded["author"] == "melchior"
     assert recorded["position"] == "yes"

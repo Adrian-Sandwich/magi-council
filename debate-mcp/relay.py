@@ -78,6 +78,7 @@ import decision  # noqa: E402
 import heads  # noqa: E402
 import personas  # noqa: E402
 import production  # noqa: E402
+import turn_errors
 from psycopg.types.json import Json  # noqa: E402
 
 from config import connect  # noqa: E402
@@ -149,6 +150,9 @@ log = logging.getLogger("relay")
 #   "thread::seat"  → turno de una cabeza en una decisión (paralelo por asiento)
 _inflight: set[str] = set()
 _inflight_lock = threading.Lock()
+# Keep a local guard until the durable failure is observed, including a DB outage.
+_failed_turns: dict[str, int] = {}
+_pending_turn_errors: dict[str, tuple[dict, str]] = {}
 
 # procesos vivos por token (Popen de disparos CLI y ejecutores). El relay
 # los siega cuando la decisión de su thread ya no está abierta ni ejecutando
@@ -381,14 +385,41 @@ def _supervise(proc: subprocess.Popen, meta: dict) -> None:
     elif rc != 0:
         log.error("agente %s en %s salió con rc=%s (%.0fs)", meta["author"], meta["thread"], rc, duration)
     else:
-        log.info("agente %s en %s ok (%.0fs)", meta["author"], meta["thread"], duration)
+        log.info("proceso de %s en %s finalizó rc=0 (%.0fs); verificando resultado", meta["author"], meta["thread"], duration)
 
-    event("trigger_done", rc=rc, timed_out=timed_out, duration_s=duration, **meta)
+    try:
+        error = (f'Tiempo agotado tras {AGENT_TIMEOUT_SECS}s.' if timed_out else
+                 f'El proceso terminó con código {rc}.' if rc else
+                 'El proceso terminó sin registrar un voto. Revisa la conexión al tablero (MCP).')
+        failed = _report_turn_error(meta, error) if meta.get('decision_id') else False
+        if failed:
+            log.error('Turno de %s en %s detenido: %s', meta['author'], meta['thread'], error)
+        event("trigger_done", rc=rc, timed_out=timed_out, duration_s=duration,
+              outcome='failed' if failed else 'completed', **meta)
+    finally:
+        with _procs_lock:
+            _procs.pop(meta["token"], None)
+        with _inflight_lock:
+            _inflight.discard(meta["token"])
 
-    with _procs_lock:
-        _procs.pop(meta["token"], None)
+
+def _report_turn_error(meta: dict, reason: str) -> bool:
+    token = meta['token']
     with _inflight_lock:
-        _inflight.discard(meta["token"])
+        _failed_turns[token] = meta['round']
+        _pending_turn_errors[token] = (meta, reason)
+    try:
+        with connect() as conn:
+            with conn.transaction():
+                failed = turn_errors.record(conn, meta['decision_id'], meta['author'], meta['round'], reason)
+    except Exception:
+        log.exception('No pude guardar el error de %s; el turno queda bloqueado hasta guardar el diagnóstico', token)
+        return True
+    with _inflight_lock:
+        _pending_turn_errors.pop(token, None)
+        if not failed:
+            _failed_turns.pop(token, None)
+    return failed
 
 
 def _log_stamp() -> str:
@@ -472,6 +503,11 @@ def _registra_fallo_de_disparo(conn, state: dict, token: str, thread: str,
     info["count"] += 1
     if info["count"] >= MAX_SPAWN_ATTEMPTS:
         failures.pop(token, None)
+        if cand.get('decision_id'):
+            with conn.transaction():
+                turn_errors.record(conn, cand['decision_id'], seat, cand['round'],
+                                   f'No se pudo iniciar el proceso tras {MAX_SPAWN_ATTEMPTS} intentos. Revisa el ejecutable del asiento.')
+            return
         log.error(
             "disparo de %s en %s estacionado: %s fallos de arranque seguidos "
             "(¿binario ausente?). No reintento más hasta que haya novedades en el thread.",
@@ -525,9 +561,7 @@ def _run_decision_turn(seat_info: dict, d: dict, producir_voto, turn: str) -> No
     cast_position. La conexión NO se sostiene abierta mientras el productor
     habla con el modelo o el proceso CLI (puede bloquear 10 minutos: con la
     conexión tomada, se acuartela un checkout de Postgres todo ese tiempo).
-    Si algo falla, el error queda en eventos: pending_turns sigue viendo al
-    asiento sin votar y lo re-dispara en el próximo ciclo (con tope por
-    decisión)."""
+    Los fallos se guardan en el dossier y requieren reintento explícito."""
     start = time.monotonic()
     meta = {
         "thread": d["thread"], "author": seat_info["seat"], "token": _token(d["thread"], seat_info["seat"]),
@@ -541,7 +575,7 @@ def _run_decision_turn(seat_info: dict, d: dict, producir_voto, turn: str) -> No
             with conn.transaction():
                 board.record_position(
                     conn, d["id"], seat_info["seat"],
-                    vote["position"], vote["body"], vote["conditions"],
+                    vote["position"], vote["body"], vote["conditions"], expected_round=d['round'],
                 )
         log.info(
             "turno %s: %s votó %s en decisión %s (%.0fs)",
@@ -551,7 +585,9 @@ def _run_decision_turn(seat_info: dict, d: dict, producir_voto, turn: str) -> No
               duration_s=round(time.monotonic() - start, 1), **meta)
     except Exception as exc:
         log.error("turno %s de %s en %s falló: %s", turn, seat_info["seat"], d["thread"], exc)
-        event("trigger_done", rc=1, error=str(exc),
+        reason = 'Tiempo agotado esperando la respuesta.' if isinstance(exc, (TimeoutError, subprocess.TimeoutExpired)) else str(exc)
+        _report_turn_error(meta, reason)
+        event("trigger_done", rc=1, error=reason, timed_out=isinstance(exc, (TimeoutError, subprocess.TimeoutExpired)),
               duration_s=round(time.monotonic() - start, 1), **meta)
 
 
@@ -661,8 +697,17 @@ def _run_cli_inline(seat_info: dict, prompt: str, cwd: str, timeout: int,
         pout = Path(tmp) / "out.txt"
         pin.write_text(prompt, encoding="utf-8")
         with pin.open("rb") as fin, pout.open("wb") as fout:
+            command = [seat_info["bin"], *seat_info.get("args", [])]
+            transport = seat_info.get('prompt_transport', 'stdin')
+            if transport == 'file':
+                command.append(f'Read the UTF-8 task file at {pin} and follow its instructions. '
+                               'Return your final answer using the exact format requested in that file.')
+            elif transport == 'argument':
+                command.append(prompt)
+            else:
+                command.append('-')
             proc = subprocess.Popen(
-                [seat_info["bin"], *seat_info.get("args", []), "-"],
+                command,
                 cwd=cwd, stdin=fin, stdout=fout, stderr=subprocess.STDOUT,
                 **({"start_new_session": True} if os.name == "posix" else {}),
             )
@@ -679,6 +724,11 @@ def _run_cli_inline(seat_info: dict, prompt: str, cwd: str, timeout: int,
                 if token is not None:
                     with _procs_lock:
                         _procs.pop(token, None)
+                    prefix = re.sub(r'[^A-Za-z0-9_.-]', '_', token.replace('::', '_')) + '_'
+                    log_path = LOG_DIR / f'{prefix}{_log_stamp()}.log'
+                    fout.flush()
+                    log_path.write_bytes(pout.read_bytes())
+                    _prune_trigger_logs(prefix)
         text = pout.read_text(encoding="utf-8", errors="replace")
     if rc != 0:
         raise RuntimeError(f"{seat_info['seat']} salió rc={rc}: {text[-300:]}")
@@ -774,7 +824,7 @@ def fetch_open_decisions(conn) -> list[dict]:
     turnos faltan. Una consulta barata: lo normal es cero o una abiertas."""
     rows = conn.execute(
         """
-        SELECT id, title, artifact, protocol, status, round, thread, heads, anchor_id
+        SELECT id, title, artifact, protocol, status, round, thread, heads, anchor_id, minority_report
         FROM decisions
         WHERE status = 'open'
         ORDER BY id
@@ -822,9 +872,17 @@ def fire_decision_turns(conn, state: dict, d: dict) -> None:
             )
             event("decision_capped", decision_id=d["id"], thread=d["thread"], triggers=ts["triggers"])
             ts["capped_notified"] = True
+        for turn in decision.pending_turns(d, d['positions']):
+            with _inflight_lock:
+                busy = _token(d['thread'], turn['seat']) in _inflight
+            if not busy:
+                with conn.transaction():
+                    turn_errors.record(conn, d['id'], turn['seat'], d['round'],
+                                       'Se alcanzó el límite de intentos de la decisión.')
         return
 
-    turns = decision.pending_turns(d, d["positions"])
+    errors = turn_errors.active(d)
+    turns = [turn for turn in decision.pending_turns(d, d["positions"]) if turn['seat'] not in errors]
     if not turns:
         return
     cwd = resolve_cwd(conn, d["thread"], ts)
@@ -840,10 +898,15 @@ def fire_decision_turns(conn, state: dict, d: dict) -> None:
     memoria = memory_ctx.memoria_para(followup + ' ' + d['title'], d.get('artifact'), thread=d['thread'])
 
     for turn in turns:
+        if turn['seat'] in turn_errors.active(d):
+            continue
         token = _token(d["thread"], turn["seat"])
         with _inflight_lock:
             busy = token in _inflight
             total = len(_inflight)
+            failed = _failed_turns.get(token) == d['round']
+        if failed:
+            continue
         if busy:
             log.info("turno de %s en %s ya está corriendo", turn["seat"], d["thread"])
             continue
@@ -858,6 +921,8 @@ def fire_decision_turns(conn, state: dict, d: dict) -> None:
         if seat_info is None:
             log.error("asiento %s ya no está en el registry, no lo puedo disparar", turn["seat"])
             event("trigger_spawn_failed", error="asiento fuera del registry", thread=d["thread"], author=turn["seat"])
+            with conn.transaction():
+                turn_errors.record(conn, d['id'], turn['seat'], d['round'], 'El asiento no existe en la configuración.')
             continue
         if seat_info.get("journal") == "inline":
             # cabeza CLI sin MCP (codex exec): prompt con journal inlineado
@@ -875,10 +940,13 @@ def fire_decision_turns(conn, state: dict, d: dict) -> None:
             log.error("asiento %s no tiene binario (decisión degradada), no lo puedo disparar", turn["seat"])
             event("trigger_spawn_failed", error="asiento sin binario",
                   thread=d["thread"], author=turn["seat"], decision_id=d["id"])
+            with conn.transaction():
+                turn_errors.record(conn, d['id'], turn['seat'], d['round'], 'El asiento no tiene ejecutable configurado.')
             continue
         prompt = decision.build_head_prompt(turn["seat"], _persona_text(turn["seat"]), d, since_id, memory=memoria)
         meta = {"decision_id": d["id"], "round": turn["round"], "turn": turn["kind"]}
-        cand = {"id": state["last_id"], "thread": d["thread"], "author": turn["seat"]}
+        cand = {"id": state["last_id"], "thread": d["thread"], "author": turn["seat"],
+                'decision_id': d['id'], 'round': d['round']}
         if trigger(turn["seat"], d["thread"], since_id, cwd, prompt, meta):
             state["spawn_failures"].pop(token, None)
             ts["triggers"] += 1
@@ -890,6 +958,10 @@ def fire_decision_turns(conn, state: dict, d: dict) -> None:
 
 def process_cycle(conn, state: dict) -> None:
     state.setdefault("spawn_failures", {})
+    with _inflight_lock:
+        unreported = list(_pending_turn_errors.values())
+    for meta, reason in unreported:
+        _report_turn_error(meta, reason)
     rows = conn.execute(
         """
         SELECT id, thread, author, kind FROM messages
@@ -908,6 +980,11 @@ def process_cycle(conn, state: dict) -> None:
             ts["capped_notified"] = False
             # un 'analisis' nuevo también reactiva los disparos estacionados
             _limpiar_fallos_de_disparo(state, r["thread"])
+            if r['author'] == 'adrian':
+                with _inflight_lock:
+                    for token in list(_failed_turns):
+                        if token.startswith(r['thread'] + '::') and token not in _pending_turn_errors:
+                            _failed_turns.pop(token, None)
         candidates[r["thread"]] = {"id": r["id"], "thread": r["thread"], "author": r["author"], "kind": r["kind"]}
         state["last_id"] = r["id"]
 

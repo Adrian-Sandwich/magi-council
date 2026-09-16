@@ -268,6 +268,20 @@ needed: the new data lives in the existing JSON dossier.
 - **type `api`**: POST to an OpenAI-compatible endpoint (Ollama, LM Studio,
   llama.cpp). The journal is inlined; same vote contract.
 
+The configured Kimi seat also uses `journal: "inline"` and `tools: true`:
+it investigates the selected repository, while the relay supplies the journal
+and records its explicit vote. This works outside MAGI's own directory without
+requiring a project-local MCP configuration. `prompt_transport: "file"` passes
+Kimi a UTF-8 task file through `-p`, avoiding Windows command-length limits;
+the default transport for other inline CLIs remains stdin.
+
+A decision head that times out, exits unsuccessfully, or finishes without a
+valid vote is marked **ERROR**, with its reason visible in the UI and journal.
+It stays paused across relay restarts. **Reintentar cabezas fallidas** resumes
+pending heads after the cause is corrected, preserving votes already received.
+CLI output is retained in the bounded per-head logs under `debate-mcp/logs/`.
+Missing `POSITION` tags no longer turn into implicit `info` votes.
+
 The personas (axes and biases) live in `debate-mcp/personas.py` — the
 provider is just wiring. Switching models is editing heads.json, nothing
 more.

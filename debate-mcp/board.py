@@ -81,6 +81,7 @@ def record_position(
     position: str,
     body: str,
     conditions: list[str] | None = None,
+    expected_round: int | None = None,
 ) -> tuple[dict, int]:
     """Registra el voto de una cabeza y aplica la orden del motor.
 
@@ -96,6 +97,8 @@ def record_position(
         raise ValueError(f"decisión {decision_id} no existe")
     if d["status"] != "open":
         raise ValueError(f"decisión {decision_id} está '{d['status']}'")
+    if expected_round is not None and d['round'] != expected_round:
+        raise ValueError('La ronda cambió mientras la cabeza estaba trabajando')
     ya = conn.execute(
         """
         SELECT 1 FROM positions
@@ -129,6 +132,9 @@ def record_position(
         """,
         (decision_id,),
     ).fetchall()
+    if author in ((d.get('minority_report') or {}).get('turn_errors') or {}):
+        conn.execute("UPDATE decisions SET minority_report=minority_report #- %s WHERE id=%s",
+                     (['turn_errors', author], decision_id))
     act = decision.advance(d, positions)
     if act["action"] == "close":
         act["mind_changes"] = decision.mind_changes(positions)

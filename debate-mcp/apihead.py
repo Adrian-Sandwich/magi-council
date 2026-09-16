@@ -9,10 +9,8 @@ responde con un voto estructurado:
     CONDITIONS: <condiciones separadas por ;>   (sólo si position=conditional)
     <razonamiento libre>
 
-El parseo del tag POSITION es el truco de fshiori/magi: el voto es dato sin
-necesidad de que el modelo "llame" nada. Si el tag no parsea, el voto cae a
-'info' con el texto crudo — el turno nunca se pierde, y el humano ve el
-razonamiento en el journal.
+El tag POSITION debe ser explícito. Una respuesta sin voto válido es un
+fallo de turno, nunca un voto informativo inventado por el coordinador.
 
 Sólo stdlib (urllib): las cabezas API no le agregan dependencias al venv.
 Funciona con Ollama (http://localhost:11434/v1), LM Studio, llama.cpp server
@@ -26,7 +24,7 @@ import urllib.request
 import personas
 
 POSITION_RE = re.compile(
-    r"^\s*POSITION\s*:\s*(yes|no|conditional|info)\b", re.IGNORECASE | re.MULTILINE
+    r"^[ \t]*(?:[•*-][ \t]+)?POSITION[ \t]*:[ \t]*(yes|no|conditional|info)[ \t\r]*$", re.IGNORECASE | re.MULTILINE
 )
 CONDITIONS_RE = re.compile(r"^\s*CONDITIONS\s*:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
 
@@ -38,14 +36,16 @@ BODY_CHARS = 2000         # tope por mensaje inlineado
 def parse_vote(text: str) -> dict:
     """Extrae position/conditions de la respuesta del modelo.
 
-    Sin tag parseable → position='info' con el texto crudo: mejor un voto
-    débil explícito que perder el turno o inventar una posición.
+    Rechaza respuestas vacías o sin un voto explícito; usa el voto final.
     """
-    m = POSITION_RE.search(text or "")
-    position = m.group(1).lower() if m else "info"
+    matches = list(POSITION_RE.finditer(text or ""))
+    if not matches:
+        raise ValueError('La cabeza terminó sin un voto POSITION válido. Revisa el formato de la respuesta.')
+    m = matches[-1]
+    position = m.group(1).lower()
     conditions = None
     if position == "conditional":
-        cm = CONDITIONS_RE.search(text)
+        cm = CONDITIONS_RE.search(text, m.end())
         if cm:
             conditions = [c.strip() for c in cm.group(1).split(";") if c.strip()]
     return {"position": position, "conditions": conditions, "body": (text or "").strip()}

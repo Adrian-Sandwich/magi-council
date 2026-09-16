@@ -564,6 +564,19 @@ def test_badge_de_abortada_es_aborted_gris():
     assert magi_ui.verdict_badge(d)["text"] == "ABORTED"
 
 
+def test_retry_failed_turns_endpoint(ui_server_conn, monkeypatch):
+    port, _, conn = ui_server_conn
+    calls = []
+    def retry(db, did, errors):
+        calls.append((did, errors))
+        return {'decision_id': did, 'action': 'retried'}
+    monkeypatch.setattr(magi_ui.turn_errors, 'retry', retry)
+    resp = _post(port, '/retry-turns', {'decision_id': 28, 'errors': {'melchior': 'attempt-1'}})
+    assert resp.status == 200
+    assert json.loads(resp.read())['action'] == 'retried'
+    assert calls == [(28, {'melchior': 'attempt-1'})]
+
+
 def test_post_abort_cierra_la_decision(ui_server_conn, monkeypatch):
     """El botón ABORT: POST /abort cierra la decisión vía board.abort_decision
     y reporta el thread."""

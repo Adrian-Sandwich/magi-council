@@ -178,6 +178,29 @@ def test_repository_selection_after_closed_decision_starts_analysis(page, browse
                      "force_new": True, "artifact": "C:/work/cutulu", "production": False}]
 
 
+def test_failed_head_shows_error_and_retry_preserves_draft(page):
+    data = snapshot()
+    error = {'id': 'attempt-1', 'round': 1, 'message': 'Tiempo agotado esperando la respuesta.'}
+    data['decisions'][0]['turn_errors'] = {'melchior': error}
+    data['decisions'][0]['seats'][0]['error'] = error
+    feed(page, data)
+    assert page.locator('.wise-man.melchior .thinking-tag').inner_text() == 'ERROR'
+    assert page.locator('.wise-man.melchior .flicker').count() == 0
+    assert 'Tiempo agotado' in page.locator('#summary-lead').inner_text()
+    page.locator('#c-input').fill('Keep this draft')
+    sent = []
+
+    def retry(route):
+        sent.append(route.request.post_data_json)
+        route.fulfill(status=200, content_type='application/json', body='{"action":"retried"}')
+
+    page.route('**/retry-turns', retry)
+    page.locator('#c-retry').click()
+    page.wait_for_function("document.getElementById('c-status').textContent.includes('Reintento solicitado')")
+    assert sent == [{'decision_id': 4, 'errors': {'melchior': 'attempt-1'}}]
+    assert page.locator('#c-input').input_value() == 'Keep this draft'
+
+
 def test_sound_transition_dedup_keyboard_and_mobile(page):
     assert page.locator("#sound-toggle").get_attribute("aria-pressed") == "false"
     assert page.locator(".wise-man").count() == 3

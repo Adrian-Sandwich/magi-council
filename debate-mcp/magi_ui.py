@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import board  # noqa: E402
 import outcomes  # noqa: E402
+import turn_errors
 
 from config import connect  # noqa: E402
 
@@ -116,6 +117,8 @@ def verdict_badge(d: dict) -> dict:
     if mr.get("aborted"):
         return {"text": "ABORTED", "color": "gray", "flicker": False}
     if d["status"] == "open":
+        if turn_errors.active(d):
+            return {"text": "TURN FAILED", "color": "#ff8d00", "flicker": False}
         return {"text": "DELIBERATING", "color": "#ff8d00", "flicker": True}
     if d["status"] == "executing":
         stage = mr.get("execution_state")
@@ -195,6 +198,7 @@ def build_state(conn) -> dict:
     out = []
     for r in rows:
         seats = []
+        errors = turn_errors.active(r)
         for seat in r["heads"]:
             mine = [p for p in by_decision.get(r["id"], []) if p["head"] == seat]
             latest = max(mine, key=lambda p: p["round"], default=None)
@@ -204,6 +208,7 @@ def build_state(conn) -> dict:
                 "voted": bool(latest and latest["round"] == r["round"]),
                 "conditions": list(latest["conditions"]) if latest and latest["conditions"] else None,
                 "body": latest["body"] if latest else None,
+                "error": errors.get(seat),
             })
         journal = [
             {
@@ -224,6 +229,7 @@ def build_state(conn) -> dict:
             "thread": r["thread"], "badge": verdict_badge(r),
             "aborted": bool(mr.get("aborted")),
             "execution_state": mr.get("execution_state"),
+            "turn_errors": errors,
             "synthesis": synthesis,
             "outcome": r.get('outcome'),
             "seats": seats, "journal": journal,
@@ -473,7 +479,7 @@ class Handler(BaseHTTPRequestHandler):
     # ---------------------------------------------------------- POST
 
     def do_POST(self) -> None:
-        if self.path not in ("/start", "/message", "/abort", "/outcome"):
+        if self.path not in ("/start", "/message", "/abort", "/outcome", "/retry-turns"):
             self._send_json({"error": "not found"}, 404)
             return
 
@@ -514,6 +520,8 @@ class Handler(BaseHTTPRequestHandler):
             self._start(payload)
         elif self.path == "/abort":
             self._abort(payload)
+        elif self.path == "/retry-turns":
+            self._retry_turns(payload)
         elif self.path == "/outcome":
             self._outcome(payload)
         else:
@@ -527,6 +535,16 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(result, 201)
         except ValueError as exc:
             self._send_json({'error': str(exc)}, 400)
+
+    def _retry_turns(self, payload):
+        try:
+            with connect() as conn:
+                with conn.transaction():
+                    result = turn_errors.retry(conn, int(payload.get('decision_id') or 0),
+                                               payload.get('errors'))
+            self._send_json(result, 200)
+        except (ValueError, TypeError) as exc:
+            self._send_json({'error': str(exc)}, 409)
 
     def _start(self, payload: dict) -> None:
         try:

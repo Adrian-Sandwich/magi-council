@@ -4,6 +4,9 @@
       "seat": "melchior",
       "name": "kimi",
       "type": "cli",
+      "journal": "inline",
+      "tools": true,
+      "prompt_transport": "file",
       "bin": "~/.kimi-code/bin/kimi.exe",
       "args": [
         "-p"

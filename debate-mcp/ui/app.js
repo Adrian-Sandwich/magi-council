@@ -79,7 +79,7 @@ function focused() {
 
 function thinkingSeats(d) {
   if (!d || d.status !== "open") return [];
-  return d.seats.filter(s => !s.voted).map(s => s.seat);
+  return d.seats.filter(s => !s.voted && !s.error).map(s => s.seat);
 }
 
 // ------------------------------------------------------------- magi
@@ -116,10 +116,10 @@ function renderMagi(d) {
     if (seat.voted && ["yes", "conditional", "info"].includes(seat.position)) inner.style.color = "#080604";
     inner.textContent = `${seat.seat.toUpperCase()} • ${i + 1}`;
     outer.appendChild(inner);
-    if (isThinking) {
+    if (isThinking || seat.error) {
       const tag = document.createElement("div");
       tag.className = "thinking-tag";
-      tag.textContent = "THINKING";
+      tag.textContent = seat.error ? "ERROR" : "THINKING";
       outer.appendChild(tag);
     }
     outer.addEventListener("click", () => openModal(seat));
@@ -256,6 +256,13 @@ function renderSummary(d) {
     : d.status === "split" ? "The perspectives do not converge. Read the three reasons below, then choose how to continue."
     : "La respuesta conjunta todavía no está disponible para esta conversación. Los aportes completos están disponibles abajo.";
   const synthesis = d.synthesis;
+  if (Object.keys(d.turn_errors || {}).length) {
+    title.textContent = "Una cabeza no pudo completar su turno";
+    lead.textContent = Object.entries(d.turn_errors).map(([seat, error]) => `${seat}: ${error.message}`).join("\n");
+    const note = document.createElement("p");
+    note.textContent = "No habrá reintentos automáticos. Los votos recibidos se conservan; corrige la causa y pulsa Reintentar cabezas fallidas.";
+    content.append(note);
+  }
   if (synthesis?.answer && ["reviewed", "partial", "generating"].includes(synthesis.status)) {
     lead.textContent = synthesis.answer;
     const approved = (synthesis.reviews || []).filter(r => r.approve).length;
@@ -304,10 +311,10 @@ function renderSummary(d) {
     ? `<strong>Conditions:</strong> ${allConditions.map(esc).join(" · ")}` : "";
   seats.innerHTML = (d.seats || []).map(s => {
     const color = safeColor(SEAT_COLORS[s.seat] || "#d8d8d8");
-    const position = s.voted ? String(s.position).toUpperCase() : "THINKING";
+    const position = s.voted ? String(s.position).toUpperCase() : s.error ? "ERROR" : "THINKING";
     return `<button class="summary-seat" data-seat="${esc(s.seat)}" style="--seat-color:${color}" aria-label="Read ${esc(s.seat)} reasoning">
       <span class="summary-seat-name">${esc(s.seat.toUpperCase())}</span><span class="summary-seat-vote">${esc(position)}</span>
-      <span class="summary-seat-body">${s.voted ? "Ver aportación completa" : "Esperando aportación"}</span></button>`;
+      <span class="summary-seat-body">${s.error ? esc(s.error.message) : s.voted ? "Ver aportación completa" : "Esperando aportación"}</span></button>`;
   }).join("");
   seats.querySelectorAll(".summary-seat").forEach(button => {
     const seat = (d.seats || []).find(s => s.seat === button.dataset.seat);
@@ -474,6 +481,8 @@ function render() {
   sendButton.disabled = sending || !connected || !document.getElementById("c-input").value.trim();
   document.querySelectorAll("#modes button, .decision-actions button, #stalemate-actions button").forEach(button => { button.disabled = sending; });
   const abortBtn = document.getElementById("c-abort");
+  document.getElementById("c-retry").hidden = uiMode !== "council" || !Object.keys(d?.turn_errors || {}).length;
+  document.getElementById("c-retry").disabled = sending || !connected;
   abortBtn.hidden = !(uiMode === "council" && d && ["open", "split", "executing"].includes(d.status));
   // NEW abre decisión nueva salteando la heurística; en CHAT no aplica
   document.getElementById("c-new").hidden = uiMode !== "council";
@@ -590,9 +599,35 @@ async function abortDecision() {
 
 document.getElementById("c-abort").addEventListener("click", abortDecision);
 
+document.getElementById("c-retry").addEventListener("click", async () => {
+  const d = focused();
+  if (!d || sending || !connected) return;
+  const status = document.getElementById("c-status");
+  sending = true;
+  render();
+  try {
+    const resp = await postJSON("/retry-turns", {decision_id: d.id,
+      errors: Object.fromEntries(Object.entries(d.turn_errors).map(([seat, error]) => [seat, error.id]))});
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || resp.statusText);
+    status.textContent = "Reintento solicitado. Los votos anteriores se conservan.";
+  } catch (err) {
+    status.textContent = `error: ${err.message}`;
+  } finally {
+    sending = false;
+    render();
+  }
+});
+
 // ------------------------------------------------------------- modal
 
 function openModal(seat) {
+  if (seat.error) {
+    document.getElementById("modal-title").textContent = `${seat.seat.toUpperCase()} — ERROR`;
+    document.getElementById("modal-content").textContent = seat.error.message;
+    document.getElementById("modal").showModal();
+    return;
+  }
   document.getElementById("modal-title").textContent =
     `${seat.seat.toUpperCase()} — ${seat.voted ? "POSITION: " + seat.position.toUpperCase() : "thinking…"}`;
   const cond = seat.conditions?.length ? `<br>CONDITIONS: ${esc(seat.conditions.join("; "))}` : "";
