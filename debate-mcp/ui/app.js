@@ -403,7 +403,7 @@ function renderHistory() {
 // Qué va a pasar con el próximo Enter, en palabras. Es la respuesta a "no sé
 // qué hará mi mensaje": la UI anticipa la acción antes de que la escribas.
 function executionIntent(text) {
-  return /^\s*(?:(?:pues|bueno|entonces)\s+|ok[,;:]?\s+)?(?:arr[eé]gl(?:ar|alo|ala|enlo)|implement(?:ar|a|alo|enlo)|hazlo|h[aá]ganlo|ejecut(?:ar|a|alo|enlo)|aplic(?:ar|a|alo|enlo)|procede|vamos\s+con\s+(?:eso|tu\s+plan|el\s+plan|ese\s+plan|tu\s+propuesta|la\s+propuesta)|adelante\s+con\s+(?:el\s+plan|tu\s+plan|eso)|haz\s+lo\s+que\s+propones)\b/i.test(text || "");
+  return /^\s*(?:(?:pues|bueno|entonces)\s+|ok[,;:]?\s+)?(?:arr[eé]gl(?:ar|alo|ala|enlo)|implement(?:ar|a|alo|enlo)|hazlo|h[aá]ganlo|ejecut(?:ar|a|alo|enlo)|aplic(?:ar|a|alo|enlo)|procede|vamos\s+con\s+(?:eso|los\s+cambios|tu\s+plan|el\s+plan|ese\s+plan|tu\s+propuesta|la\s+propuesta)|sigamos\s+con\s+(?:eso|los\s+cambios|tu\s+plan|el\s+plan)|adelante\s+con\s+(?:el\s+plan|tu\s+plan|eso)|haz\s+lo\s+que\s+propones)\b/i.test(text || "");
 }
 
 function renderIntent(d) {

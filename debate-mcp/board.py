@@ -8,7 +8,9 @@ una decisión es una decisión venga de donde venga.
 """
 
 import re
+import unicodedata
 import uuid
+from difflib import SequenceMatcher
 
 from psycopg.types.json import Json
 
@@ -236,14 +238,27 @@ _RE_EJECUTAR = re.compile(
     r"^\s*(?:pues\s+|bueno\s+|entonces\s+|ok[,;:]?\s+)?"
     r"(?:arr[eé]gl(?:ar|alo|ala|enlo)|implement(?:ar|a|alo|enlo)|hazlo|h[aá]ganlo|"
     r"ejecut(?:ar|a|alo|enlo)|aplic(?:ar|a|alo|enlo)|procede|"
-    r"vamos\s+con\s+(?:eso|tu\s+plan|el\s+plan|ese\s+plan|tu\s+propuesta|la\s+propuesta)|"
+    r"vamos\s+con\s+(?:eso|los\s+cambios|tu\s+plan|el\s+plan|ese\s+plan|tu\s+propuesta|la\s+propuesta)|"
+    r"sigamos\s+con\s+(?:eso|los\s+cambios|tu\s+plan|el\s+plan)|"
     r"adelante\s+con\s+(?:el\s+plan|tu\s+plan|eso)|haz\s+lo\s+que\s+propones)\b",
     re.IGNORECASE,
 )
 
 
 def is_execution_request(body: str) -> bool:
-    return bool(_RE_EJECUTAR.match(body or ""))
+    if _RE_EJECUTAR.match(body or ""):
+        return True
+    # El operador escribe desde móvil y con frecuencia manda typos como
+    # "vmaos con los camios". Para una decisión ya aprobada, toleramos una
+    # errata por palabra, pero exigimos la pareja intención + objeto.
+    normalized = unicodedata.normalize('NFKD', body or '').encode('ascii', 'ignore').decode().lower()
+    words = re.findall(r'[a-z]+', normalized)
+    def resembles(word, choices):
+        return any(SequenceMatcher(None, word, choice).ratio() >= .78 for choice in choices)
+    intent = any(resembles(w, ('vamos', 'sigamos', 'implementa', 'implementar',
+                               'arreglalo', 'ejecuta', 'aplica')) for w in words)
+    target = any(resembles(w, ('cambios', 'plan', 'propuesta', 'eso')) for w in words)
+    return intent and target
 
 
 def consulta_destrabe_texto(round_: int, posiciones: list[dict]) -> str:

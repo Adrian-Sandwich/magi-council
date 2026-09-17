@@ -44,7 +44,8 @@ def test_closed_follow_up_reopens_same_dossier():
 
 @pytest.mark.parametrize("text", [
     "pues arréglalo", "vamos con tu plan", "adelante con el plan",
-    "haz lo que propones", "aplica la propuesta",
+    "haz lo que propones", "aplica la propuesta", "ok sigamos con eso",
+    "ok vmaos con los camios",
 ])
 def test_execution_intent_understands_natural_followups(text):
     assert board.is_execution_request(text)

@@ -897,6 +897,14 @@ def fire_decision_turns(conn, state: dict, d: dict) -> None:
     Cada asiento tiene su candado (thread::seat): las cabezas de una misma
     decisión investigan y votan EN PARALELO."""
     ts = thread_state(state, d["thread"])
+    budget_start = (d.get('minority_report') or {}).get('round_budget_start', 1)
+    previous_budget = ts.get('round_budget_start')
+    if previous_budget is None:
+        ts['round_budget_start'] = budget_start
+    elif previous_budget != budget_start:
+        ts['round_budget_start'] = budget_start
+        ts['triggers'] = 0
+        ts.pop('capped_notified', None)
     if ts["triggers"] >= MAX_TRIGGERS_PER_DECISION:
         if not ts.get("capped_notified"):
             log.error(
