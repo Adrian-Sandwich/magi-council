@@ -1404,34 +1404,45 @@ def _execute_plan(d: dict, cwd: str) -> None:
                  d["thread"], cwd, seat["seat"], out_path.name)
         event("trigger_spawned", pid=None, round=d.get("round"), **meta)
         timed_out = False
-        with out_path.open("w", encoding="utf-8") as f:
+        with tempfile.TemporaryDirectory(prefix="magi-executor-") as tmp, \
+                out_path.open("w", encoding="utf-8") as f:
             _prune_trigger_logs(f"execute_{d['thread']}_")
-            proc = subprocess.Popen(
-                [seat["bin"], *seat.get("args", []), prompt],
-                cwd=cwd, stdout=f, stderr=subprocess.STDOUT,
-                **({"start_new_session": True} if os.name == "posix" else {}),
-            )
-            with _procs_lock:
-                _procs[meta["token"]] = proc
-            activity = {
-                "seat": seat["seat"], "started_at": now_iso(), "pid": proc.pid,
-                "turn": "execute", "log": out_path.name,
-            }
-            with connect() as conn:
-                conn.execute(
-                    "UPDATE decisions SET minority_report = minority_report || %s::jsonb WHERE id = %s",
-                    (Json({"execution_activity": activity}), d["id"]),
+            pin = Path(tmp) / "prompt.txt"
+            pin.write_text(prompt, encoding="utf-8")
+            command = [seat["bin"], *seat.get("args", [])]
+            transport = seat.get("prompt_transport", "stdin")
+            if transport == "file":
+                command.append(f"Read the UTF-8 task file at {pin} and follow every instruction in it.")
+            elif transport == "argument":
+                command.append(prompt)
+            elif transport != "stdin-only":
+                command.append("-")
+            with pin.open("rb") as fin:
+                proc = subprocess.Popen(
+                    command, cwd=cwd, stdin=fin, stdout=f, stderr=subprocess.STDOUT,
+                    **({"start_new_session": True} if os.name == "posix" else {}),
                 )
-            event("trigger_pid", pid=proc.pid, **meta)
-            try:
-                rc = proc.wait(timeout=seat.get("exec_timeout_secs", EJECUTOR_TIMEOUT_SECS))
-            except subprocess.TimeoutExpired:
-                timed_out = True
-                _kill_tree(proc)
-                rc = proc.wait()
-            finally:
                 with _procs_lock:
-                    _procs.pop(meta["token"], None)
+                    _procs[meta["token"]] = proc
+                activity = {
+                    "seat": seat["seat"], "started_at": now_iso(), "pid": proc.pid,
+                    "turn": "execute", "log": out_path.name,
+                }
+                with connect() as conn:
+                    conn.execute(
+                        "UPDATE decisions SET minority_report = minority_report || %s::jsonb WHERE id = %s",
+                        (Json({"execution_activity": activity}), d["id"]),
+                    )
+                event("trigger_pid", pid=proc.pid, **meta)
+                try:
+                    rc = proc.wait(timeout=seat.get("exec_timeout_secs", EJECUTOR_TIMEOUT_SECS))
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                    _kill_tree(proc)
+                    rc = proc.wait()
+                finally:
+                    with _procs_lock:
+                        _procs.pop(meta["token"], None)
         if timed_out or rc != 0:
             detalle = "colgado y matado" if timed_out else f"rc={rc}"
             _execution_failed(d, f"el ejecutor ({seat['seat']}) salió {detalle}. Log: {out_path.name}")

@@ -645,11 +645,11 @@ dialog::backdrop { background: #000b; }
 .flicker { animation: operator-pulse 2.5s ease-in-out infinite; }
 @keyframes operator-pulse { 50% { opacity: .65; } }
 @keyframes executor-signal {
-  0%, 100% { filter: brightness(.72); box-shadow: inset 0 0 0 #fff0, 0 0 5px #ff8d00; }
-  50% { filter: brightness(1.38); box-shadow: inset 0 0 22px #fff8, 0 0 24px #ff8d00; }
+  0%, 100% { filter: brightness(.72); box-shadow: inset 0 0 0 #fff0, 0 0 5px var(--executor-color); }
+  50% { filter: brightness(1.38); box-shadow: inset 0 0 22px #fff8, 0 0 24px var(--executor-color); }
 }
 .magi>.wise-man.executor-active>.inner { animation: executor-signal .72s infinite step-end; }
-.magi>.wise-man.executor-active { box-shadow: 0 0 18px #ff8d00; }
+.magi>.wise-man.executor-active { box-shadow: 0 0 18px var(--executor-color); }
 @media (prefers-reduced-motion: reduce) { .flicker, .thinking-line, .thinking-tag, .executor-active > .inner { animation: none; } }
 @media (max-width: 600px) {
   body { margin: 5px; }

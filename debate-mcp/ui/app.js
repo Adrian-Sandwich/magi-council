@@ -124,6 +124,7 @@ function renderMagi(d) {
       : seat.voted ? POSITION_COLORS[seat.position] : POSITION_COLORS.pending;
     const outer = document.createElement("div");
     outer.className = `wise-man ${slot}${isExecuting ? " executor-active" : ""}`;
+    outer.style.setProperty("--executor-color", safeColor(SEAT_COLORS[seat.seat] || "#ff8d00"));
     const inner = document.createElement("div");
     inner.className = "inner" + (isThinking ? " flicker" : "");
     inner.style.background = color;

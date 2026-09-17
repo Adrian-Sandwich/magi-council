@@ -111,7 +111,11 @@ def test_abort_durante_la_publicacion_cierra_el_evento_del_disparo(monkeypatch, 
     proc = Mock()
     proc.pid = 1234
     proc.wait.return_value = 0
-    monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: proc)
+    spawned = {}
+    def popen(*args, **kwargs):
+        spawned.update(command=args[0], stdin=kwargs.get("stdin"))
+        return proc
+    monkeypatch.setattr(subprocess, "Popen", popen)
 
     conn = Mock()
     conn.transaction.side_effect = lambda: nullcontext()
@@ -135,5 +139,7 @@ def test_abort_durante_la_publicacion_cierra_el_evento_del_disparo(monkeypatch, 
     done = [kw for kind, kw in events if kind == "trigger_done"]
     assert len(done) == 1, "el disparo se cerró una sola vez"
     assert done[0]["rc"] == -1 and "abortado" in done[0]["error"]
+    assert spawned["command"][-1] == "-", "Codex recibe el prompt multilínea por stdin"
+    assert spawned["stdin"] is not None
     assert not any("EJECUCIÓN FALLIDA" in str(c.args)
                    for c in conn.execute.call_args_list), "el abort no es un fallo"
