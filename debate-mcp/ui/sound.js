@@ -1,5 +1,5 @@
-// Señales originales 100% sintetizadas, con estética MAGI/Evangelion:
-// blip de consola, campana de voto, motivo de veredicto y alerta grave.
+// Señales originales 100% sintetizadas como maquinaria industrial:
+// relés, contactores, prensa hidráulica, motor, descarga neumática y sirena.
 // Sin grabaciones ni audio de terceros.
 const MagiSound = (() => {
   let context, enabled = false, volume = .25, last = -Infinity;
@@ -64,40 +64,68 @@ const MagiSound = (() => {
     source.onended = () => { voices.delete(source); source.disconnect(); filter.disconnect(); gain.disconnect(); };
     source.start(t0); source.stop(t0 + dur + .01);
   }
+  function noise({at = 0, dur = .2, level = .3, filterType = 'lowpass', frequency = 500, q = .7}) {
+    const frames = Math.max(1, Math.floor(context.sampleRate * dur));
+    const buffer = context.createBuffer(1, frames, context.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < frames; i++) data[i] = Math.random() * 2 - 1;
+    const source = context.createBufferSource(), filter = context.createBiquadFilter(), gain = context.createGain();
+    const t0 = context.currentTime + at;
+    filter.type = filterType; filter.frequency.value = frequency; filter.Q.value = q;
+    gain.gain.setValueAtTime(0, t0);
+    gain.gain.linearRampToValueAtTime(volume * level, t0 + Math.min(.015, dur / 4));
+    gain.gain.exponentialRampToValueAtTime(.0001, t0 + dur);
+    source.buffer = buffer; source.connect(filter); filter.connect(gain); gain.connect(context.destination);
+    voices.add(source);
+    source.onended = () => { voices.delete(source); source.disconnect(); filter.disconnect(); gain.disconnect(); };
+    source.start(t0); source.stop(t0 + dur + .01);
+  }
+  function impact(at = 0, level = 1) {
+    tone({f: 78, to: 38, at, dur: .22, type: 'sine', level, attack: .002});
+    noise({at, dur: .075, level: .42 * level, frequency: 310});
+    metallic({f: 118, at: at + .012, dur: .16, level: .36 * level});
+  }
+  function relay(at = 0, level = 1) {
+    noise({at, dur: .018, level: .38 * level, filterType: 'highpass', frequency: 2100, q: 1.4});
+    tone({f: 920, to: 410, at, dur: .035, type: 'square', level: .25 * level, attack: .001});
+  }
   const cues = {
     boot() {
-      radio({dur: .12, level: .18});
-      tone({f: 180, to: 540, dur: .24, type: 'sawtooth', level: .38, attack: .015});
-      tone({f: 720, to: 360, at: .18, dur: .22, type: 'square', level: .28, attack: .006});
+      relay(0, .8); relay(.09, .8); relay(.18, 1);
+      tone({f: 42, to: 86, at: .19, dur: .85, type: 'sawtooth', level: .48, attack: .18});
+      noise({at: .72, dur: .32, level: .22, filterType: 'highpass', frequency: 3600});
     },
-    // Envío: dos blips secos de consola, como teclear en la terminal MAGI.
+    // Envío: contactor doble cerrando un circuito.
     send() {
-      radio({dur: .045, level: .18});
-      metallic({f: 740, dur: .07, level: .42});
-      tone({f: 1480, to: 620, at: .075, dur: .12, type: 'square', level: .34, attack: .004});
+      relay(0, 1); relay(.075, .65);
+      tone({f: 125, to: 82, at: .04, dur: .13, type: 'sawtooth', level: .32, attack: .006});
     },
-    // Voto: una campana medida, una sola nota con coro.
+    // Voto: sello de una prensa neumática y escape corto.
     vote() {
-      radio({dur: .035, level: .14});
-      metallic({f: 392, dur: .1, level: .45});
-      pad(587.33, {at: .04, dur: .42, type: 'triangle', level: .62, attack: .006});
+      noise({dur: .12, level: .28, filterType: 'highpass', frequency: 2800});
+      impact(.07, .72);
+      noise({at: .19, dur: .22, level: .16, filterType: 'highpass', frequency: 4200});
     },
-    // Veredicto: raíz — tritono — octava. El sello de la decisión.
+    // El ejecutor arrancó: contactor, motor pesado y válvula de presión.
+    machinery() {
+      relay(0, 1); impact(.07, .7);
+      tone({f: 38, to: 74, at: .1, dur: 1.15, type: 'sawtooth', level: .58, attack: .2});
+      tone({f: 76, to: 148, at: .1, dur: 1.05, type: 'square', level: .18, attack: .22});
+      noise({at: .82, dur: .42, level: .2, filterType: 'highpass', frequency: 3300});
+    },
+    // Veredicto: tres golpes de prensa y descarga final.
     result() {
-      tone({f: 82.41, to: 123.47, dur: .72, type: 'sawtooth', level: .55, attack: .12});
-      pad(164.81, {dur: .38, level: .7});
-      pad(233.08, {at: .16, dur: .38, level: .68});
-      pad(329.63, {at: .32, dur: .6, level: .76});
+      impact(0, .72); impact(.22, .86); impact(.48, 1.05);
+      tone({f: 92, to: 46, at: .5, dur: .7, type: 'sawtooth', level: .42, attack: .03});
+      noise({at: .68, dur: .5, level: .2, filterType: 'highpass', frequency: 3900});
     },
-    // Alerta: drone grave sostenido y llamado de trompa en segunda menor,
-    // dos veces. Es el "algo se trabó / falló la ejecución" de NERV.
+    // Alerta de planta: sirena disonante sobre vibración grave.
     attention() {
-      radio({dur: .16, level: .24});
-      tone({f: 49, to: 62, dur: 2.1, type: 'sawtooth', level: .7, attack: .22});
-      tone({f: 50.5, to: 63.5, dur: 2.1, type: 'sawtooth', level: .45, attack: .25});
-      pad(220, {to: 185, at: .12, dur: .78, type: 'triangle', level: .8, attack: .08});
-      pad(220, {to: 185, at: 1.02, dur: .78, type: 'triangle', level: .8, attack: .08});
-      radio({at: .18, dur: .08, level: .18}); radio({at: 1.08, dur: .08, level: .18});
+      impact(0, .72);
+      tone({f: 47, to: 58, dur: 2.25, type: 'sawtooth', level: .55, attack: .12});
+      tone({f: 188, to: 132, at: .08, dur: .82, type: 'square', level: .44, attack: .025});
+      tone({f: 188, to: 132, at: 1.05, dur: .82, type: 'square', level: .44, attack: .025});
+      relay(.94, .65); relay(1.92, .65);
     },
   };
   function play(kind) {

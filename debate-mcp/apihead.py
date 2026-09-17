@@ -132,16 +132,27 @@ def build_inline_active_prompt(seat: str, decision: dict, journal: list[dict],
     cabeza ve."""
     history = _history(journal, "(journal vacío)")
     memoria_txt = f"\n\n{memory}" if memory else ""
+    revision = decision.get('artifact_revision') or 'no disponible'
+    investigation = (
+        "Antes de votar, INVESTIGÁ con tus herramientas: leé los archivos del "
+        "repo que importen, corré comandos de SOLO LECTURA (git status/diff, "
+        "grep, tests si aplican). No modifiques nada."
+        if decision['round'] <= 1 else
+        "Esta es una ronda posterior. Primero compará el HEAD actual con la "
+        "evidencia y los SHA ya citados en el journal. Si no cambió, reutilizá "
+        "los hechos verificados y revisá sólo objeciones o afirmaciones nuevas; "
+        "no repitas la auditoría ni la suite completa. Si cambió, investigá el "
+        "delta con comandos de SOLO LECTURA. No modifiques nada."
+    )
     return (
         f"{_persona(seat)}\n\n"
         f"Decisión #{decision['id']} (protocolo {decision['protocol']}, ronda {decision['round']}): {decision['title']}\n"
         f"Artefacto sobre el que se decide: {decision.get('artifact') or '—'} "
         f"(tu directorio de trabajo es {cwd})\n"
+        f"Revisión actual del artefacto: {revision}\n"
         f"{memoria_txt}\n\n"
         f"Journal del debate hasta ahora:\n{history}\n\n"
-        "Antes de votar, INVESTIGÁ con tus herramientas: leé los archivos del "
-        "repo que importen, corré comandos de SOLO LECTURA (git status/diff, "
-        "grep, tests si aplican). No modifiques nada.\n"
+        f"{investigation}\n"
         "Tu respuesta FINAL termina SIEMPRE con esta estructura y nada fuera "
         "de ella después:\n"
         "POSITION: yes|no|conditional|info\n"

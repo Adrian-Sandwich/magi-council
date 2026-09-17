@@ -86,6 +86,15 @@ def start(pg):
                                 seats=['melchior', 'balthasar', 'casper'])['decision_id']
 
 
+def test_stdin_only_transport_has_no_extra_positional_argument(tmp_path, allow_real_processes):
+    stub = tmp_path / 'stdin_cli.py'
+    stub.write_text("import sys\nassert len(sys.argv)==1\n"
+                    "assert sys.stdin.buffer.read().decode('utf-8')=='Revisi\\u00f3n del repo'\n"
+                    "print('POSITION: yes')\n", encoding='utf-8')
+    seat = {'seat': 'casper', 'bin': sys.executable, 'args': [str(stub)], 'prompt_transport': 'stdin-only'}
+    assert 'POSITION: yes' in relay._run_cli_inline(seat, 'Revisión del repo', str(tmp_path), 10)
+
+
 def row(pg, did):
     return pg.execute('SELECT * FROM decisions WHERE id=%s', (did,)).fetchone()
 

@@ -27,6 +27,15 @@ import heads
 import relay
 
 
+@pytest.fixture(autouse=True)
+def _clear_runtime_guards():
+    relay._completed_turns.clear()
+    relay._activity.clear()
+    yield
+    relay._completed_turns.clear()
+    relay._activity.clear()
+
+
 class FakeConn:
     """Postgres de mentira: responde las queries que usa el ciclo."""
 
@@ -109,6 +118,8 @@ def _isolate(monkeypatch, tmp_path):
     monkeypatch.setattr(relay, "EVENTS_PATH", tmp_path / "events.jsonl")
     monkeypatch.setattr(relay, "HEARTBEAT_PATH", tmp_path / "hb.json")
     relay._inflight.clear()
+    relay._activity.clear()
+    relay._completed_turns.clear()
     relay._failed_turns.clear()
     relay._pending_turn_errors.clear()
 

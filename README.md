@@ -132,14 +132,14 @@ you get an error instead of having it land on another decision. On a
 decision in execution, text adds context and **"retry"** enables the retry
 after a failure. The failure history is preserved. **New question** prepares
 another query without sending it. The send button shows **Ask council**,
-**Start production**, **Add context** or the selected action. The repo field
+**Implement approved plan**, **Add context** or the selected action. The repo field
 is only offered when opening a decision. During a disconnect sending pauses;
 errors keep your draft and never auto-retry.
 
-**Sound: OFF / ON** enables original 100% synthesized cues with a
-MAGI/Evangelion aesthetic: a console blip on send, a chime when a head votes,
-a verdict motif (root–tritone–octave) and a grave two-note alert when the
-council is stuck or execution failed. It starts off, offers volume and
+**Sound: OFF / ON** enables original 100% synthesized industrial cues:
+contactors on send, a pneumatic press when a head votes, a motor starting for
+execution, a three-impact verdict and a plant siren when the council is stuck
+or execution failed. It starts off, offers volume and
 remembers your preference locally. It plays no Evangelion recordings or
 music: everything is synthesized on the fly with WebAudio.
 First load and reconnections don't replay old notifications.
@@ -198,15 +198,19 @@ target before sending; CLI heads investigate with cwd there. Repository
 selection alone requests analysis. Without a repo, decisions use the
 system's repo (this one) or the relay's default (`DEBATE_DEFAULT_CWD`).
 
-### Production when a repo is selected
+### Execution evolves from the conversation
 
-With a repo selected, check **Implement the approved plan** to make your
-query a **plan for the system to execute**. The UI announces that intent
-before sending; changing repositories resets this option:
+There is no production mode switch. A request starts as one conversation. If
+it already asks to implement something, MAGI treats the approved result as an
+executable plan. If it began as analysis, continue the closed dossier with a
+natural instruction such as **"vamos con tu plan"**, **"arréglalo"** or
+**"aplica la propuesta"**. The intent line announces the transition before
+sending. Execution is only allowed for an approved decision; its selected
+repository or the configured default repository becomes the isolated worktree:
 
 1. The council **deliberates the plan** (like any decision).
 2. If approved, the **executor** (the seat with `"executor": true` in
-   heads.json, Melchior/kimi by default) implements it on branch
+   heads.json, Balthasar/Codex by default) implements it on branch
    `magi/d<n>` in its **own worktree**, from the saved base commit. Your
    directory and your uncommitted files stay out of that execution.
 3. A **review** opens on the exact produced commit. The heads inspect the
@@ -219,8 +223,7 @@ before sending; changing repositories resets this option:
    rejection or later changes → **MERGE PENDING**, with the reason in the
    journal.
 
-Without the implementation option, a decision is only **decided**; with
-that option and a repo, it's also **done**. The conditions from `conditional`
+Until you ask to implement it, a decision is only **decided**. The conditions from `conditional`
 votes in the approved round are preserved for the executor, including the
 majority's. If execution fails, it
 waits for an explicit retry; failures are never deleted from the journal.
@@ -274,6 +277,14 @@ and records its explicit vote. This works outside MAGI's own directory without
 requiring a project-local MCP configuration. `prompt_transport: "file"` passes
 Kimi a UTF-8 task file through `-p`, avoiding Windows command-length limits;
 the default transport for other inline CLIs remains stdin.
+
+Casper uses Claude Code with `--model opus --effort medium`, replacing one
+of the two GPT seats. Install Claude Code and run `claude auth login --claudeai`
+with your Claude subscription before enabling this configuration. Its current
+Windows executable path matches the WinGet installation; adjust `bin` for
+other installations. `prompt_transport: "stdin-only"` feeds `claude -p` the
+journal without a positional `-`. The seat uses plan permissions for analysis
+and the relay records the vote, so no project-local MCP setup is required.
 
 A decision head that times out, exits unsuccessfully, or finishes without a
 valid vote is marked **ERROR**, with its reason visible in the UI and journal.

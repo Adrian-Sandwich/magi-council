@@ -11,7 +11,7 @@
       "args": [
         "-p"
       ],
-      "executor": true
+      "synthesis_priority": 30
     },
     {
       "seat": "balthasar",
@@ -25,20 +25,32 @@
         "gpt-5.6-luna"
       ],
       "timeout_secs": 900,
+      "synthesis_priority": 20,
+      "executor": true,
       "tools": true
     },
     {
       "seat": "casper",
-      "name": "codex (gpt-5.6-luna)",
+      "name": "claude (opus)",
       "type": "cli",
       "journal": "inline",
-      "bin": "C:/Users/Adrian/src/ClaMi/debate-mcp/bin/codex.cmd",
+      "prompt_transport": "stdin-only",
+      "bin": "~/AppData/Local/Microsoft/WinGet/Packages/Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe/claude.exe",
       "args": [
-        "exec",
-        "-m",
-        "gpt-5.6-luna"
+        "-p",
+        "--strict-mcp-config",
+        "--permission-mode",
+        "plan",
+        "--allowedTools",
+        "Read,Grep,Glob",
+        "--model",
+        "opus",
+        "--effort",
+        "medium",
+        "--no-session-persistence"
       ],
       "timeout_secs": 900,
+      "synthesis_priority": 10,
       "tools": true
     }
   ]

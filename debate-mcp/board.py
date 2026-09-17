@@ -229,6 +229,22 @@ def record_position(
 # El resto del texto va como contexto para la ronda nueva.
 _RE_SEGUI = re.compile(r"^\s*(segu[ií]|continu[aá]|seguimos|retry|reintent[aá]|otra ronda)\b", re.IGNORECASE)
 
+# Una conversación aprobada puede evolucionar al ejecutor aislado sin que el
+# operador haya tenido que elegir un "modo" al abrirla. Se consulta sólo para
+# decisiones ya cerradas, aprobadas y con repositorio.
+_RE_EJECUTAR = re.compile(
+    r"^\s*(?:pues\s+|bueno\s+|entonces\s+|ok[,;:]?\s+)?"
+    r"(?:arr[eé]gl(?:ar|alo|ala|enlo)|implement(?:ar|a|alo|enlo)|hazlo|h[aá]ganlo|"
+    r"ejecut(?:ar|a|alo|enlo)|aplic(?:ar|a|alo|enlo)|procede|"
+    r"vamos\s+con\s+(?:eso|tu\s+plan|el\s+plan|ese\s+plan|tu\s+propuesta|la\s+propuesta)|"
+    r"adelante\s+con\s+(?:el\s+plan|tu\s+plan|eso)|haz\s+lo\s+que\s+propones)\b",
+    re.IGNORECASE,
+)
+
+
+def is_execution_request(body: str) -> bool:
+    return bool(_RE_EJECUTAR.match(body or ""))
+
 
 def consulta_destrabe_texto(round_: int, posiciones: list[dict]) -> str:
     """El mensaje que le pide al operador una decisión concreta cuando el
@@ -342,7 +358,8 @@ def follow_up_decision(conn, decision_id: int, body: str) -> dict:
         UPDATE decisions
         SET status = 'open', round = round + 1, ruling = NULL,
             confidence = NULL, closed_at = NULL,
-            minority_report = COALESCE(minority_report, '{}'::jsonb) ||
+            minority_report = (COALESCE(minority_report, '{}'::jsonb)
+                               - 'approved_conditions' - 'synthesis' - 'content_check') ||
                                jsonb_build_object('follow_up', true, 'round_budget_start', round+1)
         WHERE id = %s
         """,
@@ -350,6 +367,52 @@ def follow_up_decision(conn, decision_id: int, body: str) -> dict:
     )
     return {"id": row["id"], "decision_id": decision_id,
             "thread": d["thread"], "action": "follow_up"}
+
+
+def execute_approved_decision(conn, decision_id: int, body: str) -> dict:
+    """Pasa un análisis aprobado al pipeline de ejecución y revisión."""
+    d = conn.execute(
+        "SELECT * FROM decisions WHERE id = %s FOR UPDATE", (decision_id,)
+    ).fetchone()
+    if d is None:
+        raise ValueError(f"decisión {decision_id} no existe")
+    if d["status"] != "closed":
+        raise ValueError(f"decisión {decision_id} todavía está '{d['status']}'")
+    if d.get("ruling") not in ("yes", "conditional"):
+        raise ValueError("sólo una decisión aprobada puede pasar a ejecución")
+    row = conn.execute(
+        """
+        INSERT INTO messages (thread, author, kind, body, artifact)
+        VALUES (%s, 'adrian', 'contexto', %s, NULL)
+        RETURNING id
+        """,
+        (d["thread"], body),
+    ).fetchone()
+    approved_plan = ((d.get("minority_report") or {}).get("synthesis") or {}).get("answer")
+    execution_state = {"execution_state": "pending", "execution_requested": True}
+    if approved_plan:
+        execution_state["approved_plan"] = approved_plan
+    conn.execute(
+        """
+        UPDATE decisions
+        SET status = 'executing', production = true, closed_at = NULL,
+            minority_report = (COALESCE(minority_report, '{}'::jsonb) - 'synthesis') ||
+                              %s::jsonb
+        WHERE id = %s
+        """,
+        (Json(execution_state), decision_id),
+    )
+    conn.execute(
+        """
+        INSERT INTO messages (thread, author, kind, body, artifact)
+        VALUES (%s, 'magi', 'resultado', %s, NULL)
+        """,
+        (d["thread"],
+         f"EJECUCIÓN SOLICITADA — el plan aprobado pasa a la rama "
+         f"{decision.rama_ejecucion(decision_id)}; después se revisará el diff."),
+    )
+    return {"id": row["id"], "decision_id": decision_id,
+            "thread": d["thread"], "action": "execution_requested"}
 
 
 def abort_decision(conn, decision_id: int) -> dict | None:

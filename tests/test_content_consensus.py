@@ -77,3 +77,20 @@ def test_human_context_arriving_during_review_prevents_stale_closure(pg):
     assert not synthesis.finish_content(pg,identifier,version,{'reviews':reviews(True)})
     d,_=synthesis.snapshot(pg,identifier)
     assert d['status']=='open'
+
+
+def test_reviewed_synthesis_replaces_raw_conditions_with_consolidated_work(pg):
+    with pg.transaction():
+        identifier = board.start_decision(pg, 'Mejorar repo', protocol='adaptive')['decision_id']
+    _, version = synthesis.snapshot(pg, identifier)
+    result = {
+        'status': 'reviewed', 'answer': 'Plan acotado.', 'agreements': [],
+        'differences': [], 'open_questions': [], 'reviews': reviews(True),
+        'blocking_conditions': ['pytest pasa en Windows', 'CI incluye Windows'],
+        'deferred_items': ['refactor grande posterior'],
+    }
+    assert synthesis.save(pg, identifier, version, result)
+    d, _ = synthesis.snapshot(pg, identifier)
+    assert d['minority_report']['approved_conditions'] == [
+        'pytest pasa en Windows', 'CI incluye Windows']
+    assert d['minority_report']['deferred_items'] == ['refactor grande posterior']

@@ -134,14 +134,11 @@ def test_composer_targets_actions_and_preserves_failed_drafts(page):
     assert page.locator("#c-send").inner_text() == "Ask council"
     page.locator("#c-repo").fill("C:/work/example")
     assert page.locator("#c-send").inner_text() == "Ask council"
-    page.locator("#c-production").check()
-    assert page.locator("#c-send").inner_text() == "Start production"
     page.locator("#c-send").click()
     page.wait_for_function("!document.getElementById('c-send').disabled")
     assert sent[-1]["force_new"] is True
     assert "decision_id" not in sent[-1]
     assert sent[-1]["artifact"] == "C:/work/example"
-    assert sent[-1]["production"] is True
     page.evaluate("window.feed.onerror()")
     assert page.locator("#c-send").is_disabled()
     assert not errors
@@ -175,7 +172,26 @@ def test_repository_selection_after_closed_decision_starts_analysis(page, browse
     page.locator("#c-send").click()
     page.wait_for_function("document.getElementById('c-status').textContent.includes('#5 opened')")
     assert sent == [{"mode": "council", "body": "Analyze this repository",
-                     "force_new": True, "artifact": "C:/work/cutulu", "production": False}]
+                     "force_new": True, "artifact": "C:/work/cutulu"}]
+
+
+def test_natural_followup_evolves_approved_analysis_to_execution(page):
+    data = snapshot("closed")
+    data["decisions"][0].update(ruling="conditional", artifact="C:/work/cutulu")
+    feed(page, data)
+    page.locator("#c-input").fill("vamos con tu plan")
+    assert page.locator("#c-send").inner_text() == "Implement approved plan"
+    assert "isolated execution" in page.locator("#c-intent").inner_text()
+    sent = []
+    page.route("**/message", lambda route: (
+        sent.append(route.request.post_data_json),
+        route.fulfill(status=201, content_type="application/json",
+                      body='{"action":"execution_requested","decision_id":4}')
+    ))
+    page.locator("#c-send").click()
+    page.wait_for_function("document.getElementById('c-status').textContent.includes('isolated execution')")
+    assert sent == [{"mode": "council", "body": "vamos con tu plan",
+                     "decision_id": 4, "action": "execute"}]
 
 
 def test_failed_head_shows_error_and_retry_preserves_draft(page):
@@ -214,10 +230,13 @@ def test_sound_transition_dedup_keyboard_and_mobile(page):
     feed(page, data)
     feed(page, data)
     assert page.evaluate("window.cues") == ["vote"]
+    data["decisions"][0].update(status="executing", execution_state="pending")
+    feed(page, data)
+    assert page.evaluate("window.cues") == ["vote", "machinery"]
     page.evaluate("window.feed.onerror()")
     data["decisions"][0]["status"] = "split"
     feed(page, data)
-    assert page.evaluate("window.cues") == ["vote"]
+    assert page.evaluate("window.cues") == ["vote", "machinery"]
     page.locator(".wise-man").first.focus()
     page.keyboard.press("Enter")
     assert page.locator("#modal").is_visible()

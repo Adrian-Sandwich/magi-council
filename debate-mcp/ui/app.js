@@ -305,16 +305,26 @@ function renderSummary(d) {
   } else if (synthesis?.status === "generating") {
     lead.textContent = `${synthesis.current_head || "El consejo"} está redactando la respuesta conjunta. Ciclo ${synthesis.cycle || 1}/2; hasta 120 segundos por intervención.`;
   }
-  const allConditions = [...new Set((d.seats || []).flatMap(s => s.conditions || []))];
+  const allConditions = d.approved_conditions?.length
+    ? d.approved_conditions
+    : [...new Set((d.seats || []).filter(s => s.voted).flatMap(s => s.conditions || []))];
   conditions.hidden = !allConditions.length;
   conditions.innerHTML = allConditions.length
     ? `<strong>Conditions:</strong> ${allConditions.map(esc).join(" · ")}` : "";
+  if (d.deferred_items?.length) {
+    conditions.hidden = false;
+    conditions.innerHTML += `${allConditions.length ? "<br>" : ""}<strong>Later:</strong> ${d.deferred_items.map(esc).join(" · ")}`;
+  }
   seats.innerHTML = (d.seats || []).map(s => {
     const color = safeColor(SEAT_COLORS[s.seat] || "#d8d8d8");
-    const position = s.voted ? String(s.position).toUpperCase() : s.error ? "ERROR" : "THINKING";
+    const elapsed = s.activity?.started_at
+      ? Math.max(0, Math.round((Date.now() - Date.parse(s.activity.started_at)) / 1000)) : null;
+    const phase = s.activity?.turn === "synthesis" ? "SYNTHESIZING" : "INVESTIGATING";
+    const position = s.voted ? String(s.position).toUpperCase() : s.error ? "ERROR"
+      : s.activity ? `${phase} · ${elapsed}s` : "WAITING";
     return `<button class="summary-seat" data-seat="${esc(s.seat)}" style="--seat-color:${color}" aria-label="Read ${esc(s.seat)} reasoning">
       <span class="summary-seat-name">${esc(s.seat.toUpperCase())}</span><span class="summary-seat-vote">${esc(position)}</span>
-      <span class="summary-seat-body">${s.error ? esc(s.error.message) : s.voted ? "Ver aportación completa" : "Esperando aportación"}</span></button>`;
+      <span class="summary-seat-body">${s.error ? esc(s.error.message) : s.voted ? "Ver aportación completa" : s.activity ? `PID ${esc(s.activity.pid || "pending")} · ${esc(s.activity.turn || "turn")}` : "Esperando aportación"}</span></button>`;
   }).join("");
   seats.querySelectorAll(".summary-seat").forEach(button => {
     const seat = (d.seats || []).find(s => s.seat === button.dataset.seat);
@@ -392,6 +402,10 @@ function renderHistory() {
 
 // Qué va a pasar con el próximo Enter, en palabras. Es la respuesta a "no sé
 // qué hará mi mensaje": la UI anticipa la acción antes de que la escribas.
+function executionIntent(text) {
+  return /^\s*(?:(?:pues|bueno|entonces)\s+|ok[,;:]?\s+)?(?:arr[eé]gl(?:ar|alo|ala|enlo)|implement(?:ar|a|alo|enlo)|hazlo|h[aá]ganlo|ejecut(?:ar|a|alo|enlo)|aplic(?:ar|a|alo|enlo)|procede|vamos\s+con\s+(?:eso|tu\s+plan|el\s+plan|ese\s+plan|tu\s+propuesta|la\s+propuesta)|adelante\s+con\s+(?:el\s+plan|tu\s+plan|eso)|haz\s+lo\s+que\s+propones)\b/i.test(text || "");
+}
+
 function renderIntent(d) {
   const el = document.getElementById("c-intent");
   const repo = document.getElementById("c-repo").value.trim();
@@ -400,9 +414,7 @@ function renderIntent(d) {
     txt = "↳ Enter talks to the three heads in the open thread — no vote, just their takes.";
   } else if (!d) {
     txt = repo
-      ? document.getElementById("c-production").checked
-        ? `↳ Enter opens a PRODUCTION decision on ${repo} — the approved plan will be implemented, reviewed and merged.`
-        : `↳ Enter asks the council to analyze ${repo}.`
+      ? `↳ Enter opens a decision on ${repo}. If you later ask to implement the approved plan, this same conversation evolves into isolated execution and review.`
       : "↳ Enter opens a NEW decision using the default repository. Choose a repository below to analyze another project.";
   } else if (d.status === "open") {
     txt = `↳ Enter adds CONTEXT to #${d.id} — the heads read it on their next turn (${d.round}° round).`;
@@ -421,7 +433,9 @@ function renderIntent(d) {
       txt = `↳ Enter adds context to #${d.id} — the executor is working; the council will review the diff after.`;
     }
   } else {
-    txt = `↳ Enter continues #${d.id} in the same thread — previous reasoning and memory stay attached. Use New question for a separate decision.`;
+    txt = executionIntent(document.getElementById("c-input").value) && ["yes", "conditional"].includes(d.ruling)
+      ? `↳ Enter sends approved plan #${d.id} to isolated execution; MAGI will review the diff before merging.`
+      : `↳ Enter continues #${d.id} in the same thread — previous reasoning and memory stay attached. Ask to implement it when you want this plan executed.`;
   }
   if (d && uiMode === "council") txt += ` Repository: ${d.artifact || "default (no folder selected)"}.`;
   el.textContent = txt;
@@ -467,13 +481,11 @@ function render() {
   const newQuestion = uiMode === "council" && !active;
   document.querySelector(".composer-opts").hidden = !newQuestion;
   document.getElementById("repo-help").hidden = !newQuestion;
-  document.getElementById("production-option").hidden = !newQuestion;
   if (!newQuestion) document.getElementById("fs-panel").hidden = true;
-  const repo = document.getElementById("c-repo").value.trim();
-  document.getElementById("c-production").disabled = !repo;
   const sendButton = document.getElementById("c-send");
   sendButton.textContent = sending ? "Sending…" : uiMode === "chat" ? "Send message"
-    : newQuestion && !d ? (repo && document.getElementById("c-production").checked ? "Start production" : "Ask council")
+    : newQuestion && !d ? "Ask council"
+    : d.status === "closed" && executionIntent(document.getElementById("c-input").value) ? "Implement approved plan"
     : d.status === "closed" ? "Continue this decision"
     : d.status === "split" ? (replyAction === "resume" ? "Continue discussion" : "Close with my ruling") : "Add context";
   document.getElementById("sa-segui").setAttribute("aria-pressed", String(replyAction === "resume"));
@@ -514,17 +526,11 @@ document.getElementById("sa-ruling").addEventListener("click", () => {
   input.focus();
 });
 
-// --- toggle production: el repo y la explicación sólo aparecen cuando aplica
 function repositoryChanged() {
   newDraft = true;
-  document.getElementById("c-production").checked = false;
   render();
 }
 document.getElementById("c-repo").addEventListener("input", repositoryChanged);
-document.getElementById("c-production").addEventListener("change", () => {
-  newDraft = true;
-  render();
-});
 
 // --- mini-explorador de carpetas: elegir el repo sin tipear paths
 let fsCurrent = null;
@@ -663,16 +669,16 @@ async function send(forceNew = false) {
     if (target && ["open", "split", "executing", "closed"].includes(target.status)) {
       payload.decision_id = target.id;
       if (target.status === "split") payload.action = replyAction;
-      if (target.status === "closed") payload.action = "followup";
+      if (target.status === "closed") payload.action = executionIntent(body) ? "execute" : "followup";
     } else {
       payload.force_new = true;
     }
   }
-  // Repository context is independent of permission to execute a plan.
+  // The repository is context. Execution intent can emerge later in this
+  // same conversation, after the council has produced an approved plan.
   const repo = document.getElementById("c-repo").value.trim();
   if (uiMode === "council" && repo && (payload.force_new || forceNew)) {
     payload.artifact = repo;
-    payload.production = document.getElementById("c-production").checked;
   }
   if (forceNew) payload.force_new = true;
   sending = true;
@@ -706,6 +712,8 @@ async function send(forceNew = false) {
       status.textContent = "context added — the heads will see it on their next turn";
     } else if (data.action === "follow_up") {
       status.textContent = `decision #${data.decision_id} continued — the existing journal and memory stay attached`;
+    } else if (data.action === "execution_requested") {
+      status.textContent = `decision #${data.decision_id} is entering isolated execution — the diff will be reviewed before merge`;
     } else {
       status.textContent = "sent — the council answers in turn";
     }
@@ -736,7 +744,8 @@ events.onmessage = e => {
   const current = next.decisions.find(d => d.id === previous?.id);
   if (soundBaseline && previous && current) {
     if (current.status !== previous.status || current.execution_state !== previous.execution_state) {
-      MagiSound.play(current.status === "split" || ["failed", "merge_blocked"].includes(current.execution_state) ? "attention" : "result");
+      MagiSound.play(current.status === "split" || ["failed", "merge_blocked"].includes(current.execution_state)
+        ? "attention" : current.status === "executing" ? "machinery" : "result");
     } else if (current.round === previous.round && current.seats.some(s => s.voted && !previous.seats.find(p => p.seat === s.seat)?.voted)) {
       MagiSound.play("vote");
     }

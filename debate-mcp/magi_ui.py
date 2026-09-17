@@ -42,6 +42,7 @@ import turn_errors
 from config import connect  # noqa: E402
 
 UI_DIR = Path(__file__).resolve().parent / "ui"
+HEARTBEAT_PATH = Path(__file__).resolve().parent / "logs" / "relay_heartbeat.json"
 
 PORT = int(os.environ.get("MAGI_UI_PORT", "8051"))
 POLL_SECS = 5
@@ -141,7 +142,7 @@ def build_state(conn) -> dict:
     y la cola del journal. Recibe una conexión: testeable sin levantar HTTP."""
     open_rows = conn.execute(
         """
-        SELECT id, title, artifact, protocol, status, ruling, confidence, round, thread, heads, minority_report,
+        SELECT id, title, artifact, protocol, status, ruling, confidence, round, thread, heads, minority_report, production,
                (SELECT COALESCE(max(id),0) FROM messages WHERE thread=decisions.thread) AS journal_version,
                (SELECT to_jsonb(o) FROM decision_outcomes o WHERE decision_id=decisions.id ORDER BY o.id DESC LIMIT 1) AS outcome
         FROM decisions WHERE status IN ('open', 'split', 'executing') ORDER BY id
@@ -149,7 +150,7 @@ def build_state(conn) -> dict:
     ).fetchall()
     closed_rows = conn.execute(
         """
-        SELECT id, title, artifact, protocol, status, ruling, confidence, round, thread, heads, minority_report,
+        SELECT id, title, artifact, protocol, status, ruling, confidence, round, thread, heads, minority_report, production,
                (SELECT COALESCE(max(id),0) FROM messages WHERE thread=decisions.thread) AS journal_version,
                (SELECT to_jsonb(o) FROM decision_outcomes o WHERE decision_id=decisions.id ORDER BY o.id DESC LIMIT 1) AS outcome
         FROM decisions WHERE status = 'closed' ORDER BY id DESC LIMIT %s
@@ -195,6 +196,12 @@ def build_state(conn) -> dict:
     for m in messages:
         msgs_by_thread.setdefault(m["thread"], []).append(m)
 
+    try:
+        runtime = json.loads(HEARTBEAT_PATH.read_text(encoding="utf-8"))
+        activity = {item.get("token"): item for item in runtime.get("activity", [])}
+    except (OSError, ValueError, TypeError):
+        activity = {}
+
     out = []
     for r in rows:
         seats = []
@@ -209,6 +216,7 @@ def build_state(conn) -> dict:
                 "conditions": list(latest["conditions"]) if latest and latest["conditions"] else None,
                 "body": latest["body"] if latest else None,
                 "error": errors.get(seat),
+                "activity": activity.get(f"{r['thread']}::{seat}"),
             })
         journal = [
             {
@@ -229,6 +237,10 @@ def build_state(conn) -> dict:
             "thread": r["thread"], "badge": verdict_badge(r),
             "aborted": bool(mr.get("aborted")),
             "execution_state": mr.get("execution_state"),
+            "execution_activity": activity.get(f"{r['thread']}::executor"),
+            "production": bool(r.get("production")),
+            "approved_conditions": list(mr.get("approved_conditions") or []),
+            "deferred_items": list(mr.get("deferred_items") or []),
             "turn_errors": errors,
             "synthesis": synthesis,
             "outcome": r.get('outcome'),
@@ -658,18 +670,19 @@ class Handler(BaseHTTPRequestHandler):
                                            "Escribí qué querés hacer y el consejo lo deliberá.",
                             }
                         else:
-                            # production es un flag EXPLÍCITO del cliente
-                            # (defensa en profundidad: no se infiere del
-                            # artifact — antes cualquier pregunta con repo
-                            # era un plan auto-ejecutable que mergea en git)
+                            # El modo evoluciona con la conversación. Una
+                            # petición explícita de implementación nace como
+                            # production; una consulta normal puede pasar a
+                            # ejecución después, cuando ya tiene aprobación.
+                            production = payload.get("production") is True or board.is_execution_request(body)
                             result = board.start_decision(
                                 conn, title=body,
                                 artifact=payload.get("artifact"),
                                 protocol=payload.get("protocol") or "adaptive",
-                                production=payload.get("production") is True,
+                                production=production,
                             )
                             result = {**result, "kind": "decision", "action": "opened",
-                                      "production": payload.get("production") is True}
+                                      "production": production}
                     elif d["status"] == "open" and _es_solo_segui(body):
                         # "seguí" solo no agrega contexto: es la palabra de
                         # reabrir un STALEMATE usada en el estado equivocado.
@@ -683,13 +696,21 @@ class Handler(BaseHTTPRequestHandler):
                         }
                     else:
                         action = payload.get("action")
-                        if action == "followup":
+                        if action == "execute" or (
+                            action == "followup" and board.is_execution_request(body)
+                        ):
+                            result = board.execute_approved_decision(conn, int(d["id"]), body)
+                            action = "execute"
+                        elif action == "followup":
                             result = board.follow_up_decision(conn, int(d["id"]), body)
                         elif action is not None:
                             result = board.human_message(conn, d["thread"], body, action=action)
                         else:
                             result = board.human_message(conn, d["thread"], body)
-                        if action == "followup":
+                        if action == "execute":
+                            result = {**result, "kind": "decision", "decision_id": d["id"],
+                                      "action": "execution_requested"}
+                        elif action == "followup":
                             result = {**result, "kind": "decision", "decision_id": d["id"], "action": "follow_up"}
                         elif result.get("reopened_decision"):
                             result = {

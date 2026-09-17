@@ -53,6 +53,7 @@ viéndolo fallar en vivo el 2026-08-26:
 """
 
 import json
+import locale
 import logging
 import os
 import re
@@ -150,6 +151,8 @@ log = logging.getLogger("relay")
 #   "thread::seat"  → turno de una cabeza en una decisión (paralelo por asiento)
 _inflight: set[str] = set()
 _inflight_lock = threading.Lock()
+_activity: dict[str, dict] = {}
+_completed_turns: set[tuple[str, int]] = set()
 # Keep a local guard until the durable failure is observed, including a DB outage.
 _failed_turns: dict[str, int] = {}
 _pending_turn_errors: dict[str, tuple[dict, str]] = {}
@@ -220,7 +223,20 @@ def event(kind: str, **fields) -> None:
     disparos, cuánto tardan, cuántos fallan. `healthcheck.py` lee esto."""
     _rotate_events_if_needed()
     rec = {"ts": now_iso(), "event": kind, **fields}
-    with EVENTS_PATH.open("a") as f:
+    token = fields.get("token")
+    if token:
+        with _inflight_lock:
+            if kind == "trigger_spawned":
+                _activity[token] = {
+                    "token": token, "started_at": rec["ts"],
+                    "thread": fields.get("thread"), "seat": fields.get("author"),
+                    "turn": fields.get("turn"), "pid": fields.get("pid"),
+                }
+            elif kind == "trigger_pid" and token in _activity:
+                _activity[token]["pid"] = fields.get("pid")
+            elif kind == "trigger_done":
+                _activity.pop(token, None)
+    with EVENTS_PATH.open("a", encoding="utf-8") as f:
         f.write(json.dumps(rec) + "\n")
 
 
@@ -231,6 +247,7 @@ def write_heartbeat(state: dict, pg_ok: bool) -> None:
     OperationalError cada 20s, nadie enterado."""
     with _inflight_lock:
         inflight = sorted(_inflight)
+        activity = [dict(_activity[t]) for t in inflight if t in _activity]
     HEARTBEAT_PATH.write_text(json.dumps({
         "ts": now_iso(),
         "pid": os.getpid(),
@@ -238,6 +255,7 @@ def write_heartbeat(state: dict, pg_ok: bool) -> None:
         "memory_sync": memory_sync.sync.snapshot(),
         "last_id": state["last_id"],
         "inflight": inflight,
+        "activity": activity,
         "pending": len(state["pending"]),
         "capped_threads": sorted(
             t for t, ts in state["threads"].items()
@@ -577,6 +595,8 @@ def _run_decision_turn(seat_info: dict, d: dict, producir_voto, turn: str) -> No
                     conn, d["id"], seat_info["seat"],
                     vote["position"], vote["body"], vote["conditions"], expected_round=d['round'],
                 )
+        with _inflight_lock:
+            _completed_turns.add((meta['token'], d['round']))
         log.info(
             "turno %s: %s votó %s en decisión %s (%.0fs)",
             turn, seat_info["seat"], vote["position"], d["id"], time.monotonic() - start,
@@ -704,6 +724,8 @@ def _run_cli_inline(seat_info: dict, prompt: str, cwd: str, timeout: int,
                                'Return your final answer using the exact format requested in that file.')
             elif transport == 'argument':
                 command.append(prompt)
+            elif transport == 'stdin-only':
+                pass  # Claude -p reads stdin without a positional '-' argument.
             else:
                 command.append('-')
             proc = subprocess.Popen(
@@ -714,6 +736,8 @@ def _run_cli_inline(seat_info: dict, prompt: str, cwd: str, timeout: int,
             if token is not None:
                 with _procs_lock:
                     _procs[token] = proc
+                event("trigger_pid", token=token, pid=proc.pid,
+                      thread=token.split("::", 1)[0], author=seat_info["seat"])
             try:
                 rc = proc.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
@@ -729,10 +753,20 @@ def _run_cli_inline(seat_info: dict, prompt: str, cwd: str, timeout: int,
                     fout.flush()
                     log_path.write_bytes(pout.read_bytes())
                     _prune_trigger_logs(prefix)
-        text = pout.read_text(encoding="utf-8", errors="replace")
+        text = _decode_cli_output(pout.read_bytes())
     if rc != 0:
         raise RuntimeError(f"{seat_info['seat']} salió rc={rc}: {text[-300:]}")
     return text
+
+
+def _decode_cli_output(data: bytes) -> str:
+    """Decode Windows CLIs without silently persisting replacement glyphs."""
+    for encoding in dict.fromkeys(("utf-8", locale.getpreferredencoding(False), "cp1252")):
+        try:
+            return data.decode(encoding)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return data.decode("utf-8", errors="replace")
 
 
 def _run_cli_inline_turn(seat_info: dict, d: dict, cwd: str, memory: str | None = None) -> None:
@@ -886,6 +920,13 @@ def fire_decision_turns(conn, state: dict, d: dict) -> None:
     if not turns:
         return
     cwd = resolve_cwd(conn, d["thread"], ts)
+    turn_decision = dict(d)
+    try:
+        rc, revision = _git(cwd, ["rev-parse", "HEAD"], timeout=10)
+        if rc == 0:
+            turn_decision["artifact_revision"] = revision.splitlines()[0]
+    except Exception:
+        pass
     # since_id fijo en el anchor: la cabeza siempre lee el journal completo
     # desde el título (sabe lo que dijeron las otras en rondas previas).
     since_id = max((d.get("anchor_id") or 1) - 1, 0)
@@ -905,10 +946,13 @@ def fire_decision_turns(conn, state: dict, d: dict) -> None:
             busy = token in _inflight
             total = len(_inflight)
             failed = _failed_turns.get(token) == d['round']
+            completed = (token, d['round']) in _completed_turns
+        if completed:
+            continue
         if failed:
             continue
         if busy:
-            log.info("turno de %s en %s ya está corriendo", turn["seat"], d["thread"])
+            log.debug("turno de %s en %s ya está corriendo", turn["seat"], d["thread"])
             continue
         if total >= MAX_CONCURRENT_TRIGGERS:
             log.warning("techo de %s turnos concurrentes, encolo %s", MAX_CONCURRENT_TRIGGERS, turn["seat"])
@@ -927,12 +971,12 @@ def fire_decision_turns(conn, state: dict, d: dict) -> None:
         if seat_info.get("journal") == "inline":
             # cabeza CLI sin MCP (codex exec): prompt con journal inlineado
             # por stdin y voto parseado del stdout.
-            if fire_cli_inline_turn(seat_info, d, cwd, memoria):
+            if fire_cli_inline_turn(seat_info, turn_decision, cwd, memoria):
                 state["spawn_failures"].pop(token, None)
                 ts["triggers"] += 1
             continue
         if seat_info.get("type") == "api":
-            if fire_api_turn(seat_info, d, memoria):
+            if fire_api_turn(seat_info, turn_decision, memoria):
                 state["spawn_failures"].pop(token, None)
                 ts["triggers"] += 1
             continue
@@ -1001,6 +1045,16 @@ def process_cycle(conn, state: dict) -> None:
     state["pending"] = retained
 
     open_decisions = fetch_open_decisions(conn)
+    open_turns = {
+        (_token(d['thread'], seat), d['round'])
+        for d in open_decisions for seat in d['heads']
+    }
+    visible_votes = {
+        (_token(d['thread'], p['head']), p['round'])
+        for d in open_decisions for p in d.get('positions', [])
+    }
+    with _inflight_lock:
+        _completed_turns.intersection_update(open_turns - visible_votes)
     journal_threads = {d["thread"] for d in open_decisions}
 
     # --- threads libres: la lógica clásica, ahora sobre los asientos del registry
@@ -1121,8 +1175,13 @@ def process_cycle(conn, state: dict) -> None:
 def _synthesis_invoke(seat, prompt):
     prompt = apihead._persona(seat['seat']) + '\n\n' + prompt
     token = 'synthesis:' + seat['seat']
+    started = time.monotonic()
     with _inflight_lock:
         _inflight.add(token)
+    event('trigger_spawned', pid=None, token=token, thread='synthesis',
+          author=seat['seat'], turn='synthesis')
+    error = None
+    timed_out = False
     try:
         if seat.get('type') == 'api':
             return apihead.chat(seat['base_url'], seat['model'], apihead._persona(seat['seat']), prompt, 120)
@@ -1150,7 +1209,15 @@ def _synthesis_invoke(seat, prompt):
                     proc.wait()
                     raise
             return out.read_text(encoding='utf-8', errors='replace')
+    except Exception as exc:
+        error = str(exc)
+        timed_out = isinstance(exc, (TimeoutError, subprocess.TimeoutExpired))
+        raise
     finally:
+        event('trigger_done', rc=1 if error else 0, error=error,
+              timed_out=timed_out,
+              duration_s=round(time.monotonic() - started, 1), token=token,
+              thread='synthesis', author=seat['seat'], turn='synthesis')
         with _inflight_lock:
             _inflight.discard(token)
         with _procs_lock:
@@ -1235,12 +1302,15 @@ def _git(cwd: str, args: list[str], timeout: int = 60) -> tuple[int, str]:
 def _prompt_ejecucion(d: dict, base: str, condiciones: list[str]) -> str:
     rama = decision.rama_ejecucion(d["id"])
     cond = "; ".join(condiciones) if condiciones else "ninguna explicita"
+    approved_plan = (d.get("minority_report") or {}).get("approved_plan")
+    plan = approved_plan or d['title']
     return (
         f"Sos el EJECUTOR del sistema MAGI. El consejo aprobó un plan y vos lo "
         f"implementás. Sos un agente autónomo: usá tus herramientas (leer, "
         f"escribir código, ejecutar tests/comandos) hasta terminar. No pidas "
         f"confirmación, no te detengas a preguntar.\n\n"
-        f"Plan (decisión #{d['id']}): {d['title']}\n"
+        f"Plan aprobado (decisión #{d['id']}): {plan}\n"
+        f"Petición original: {d['title']}\n"
         f"Condiciones impuestas por el consejo: {cond}\n"
         f"Repositorio de trabajo: tu worktree aislado (directorio actual).\n\n"
         f"Instrucciones:\n"

@@ -155,10 +155,17 @@ def check_decisions() -> tuple[str, str]:
         with psycopg.connect(CONNINFO, connect_timeout=5) as conn:
             rows = conn.execute(
                 """
-                SELECT id, round, extract(epoch FROM now() - created_at) AS age_secs
-                FROM decisions
-                WHERE status = 'open'
-                ORDER BY created_at
+                SELECT d.id, d.round,
+                       extract(epoch FROM now() - greatest(
+                           d.created_at,
+                           coalesce((SELECT max(m.created_at) FROM messages m
+                                     WHERE m.thread=d.thread), d.created_at),
+                           coalesce((SELECT max(p.created_at) FROM positions p
+                                     WHERE p.decision_id=d.id), d.created_at)
+                       )) AS age_secs
+                FROM decisions d
+                WHERE d.status = 'open'
+                ORDER BY age_secs DESC
                 """
             ).fetchall()
     except psycopg.OperationalError:

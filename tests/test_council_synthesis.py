@@ -1,4 +1,5 @@
 import json
+import threading
 
 import council_synthesis as synthesis
 
@@ -21,6 +22,26 @@ def test_three_reviews_required_and_disagreement_preserved():
     assert len(result['reviews']) == 3
     assert result['differences'] == DRAFT['differences']
     assert len(calls) == 4
+
+
+def test_writer_priority_and_reviews_run_in_parallel():
+    barrier = threading.Barrier(3)
+    seats = [dict(seat=s, type='api', synthesis_priority=priority)
+             for s, priority in zip(BUNDLE['heads'], (30, 20, 10))]
+    calls = []
+    lock = threading.Lock()
+
+    def invoke(seat, prompt):
+        with lock:
+            calls.append(seat['seat'])
+        if 'Redactá una respuesta' in prompt:
+            return json.dumps(DRAFT)
+        barrier.wait(timeout=2)
+        return json.dumps({'approve': True, 'accept_answer': True, 'feedback': ''})
+
+    result = synthesis.compose(BUNDLE, seats, invoke)
+    assert calls[0] == 'casper'
+    assert result['status'] == 'reviewed'
 
 
 def test_dissent_never_becomes_consensus_and_budget_is_bounded():
@@ -88,7 +109,7 @@ def test_draft_is_published_before_slow_review_and_survives_failed_revision():
                 raise TimeoutError()
             return json.dumps(DRAFT)
         assert updates[-1]['answer'] == DRAFT['answer']
-        assert updates[-1]['current_head'] == seat['seat']
+        assert updates[-1]['current_head'] == 'all heads'
         return json.dumps({'approve':False,'feedback':'Aclarar el alcance'})
     result = synthesis.compose(BUNDLE,SEATS,invoke,progress=updates.append)
     assert result['answer'] == DRAFT['answer']

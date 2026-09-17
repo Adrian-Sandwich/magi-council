@@ -518,6 +518,26 @@ def test_council_closed_decision_continues_same_thread(ui_server_conn, monkeypat
     assert calls == {"decision_id": 2, "body": "contexto"}
 
 
+def test_council_closed_approved_evolves_to_execution(ui_server_conn, monkeypatch):
+    port, _, conn = ui_server_conn
+    conn.decisions = [_decision(2, status="closed", ruling="conditional")]
+    calls = {}
+    monkeypatch.setattr(
+        magi_ui.board, "execute_approved_decision",
+        lambda c, decision_id, body: calls.update(decision_id=decision_id, body=body) or {
+            "id": 78, "decision_id": decision_id, "thread": "d2",
+            "action": "execution_requested",
+        },
+    )
+    response = _post(port, "/message", {
+        "mode": "council", "body": "vamos con tu plan", "decision_id": 2,
+        "action": "execute",
+    })
+    assert response.status == 201
+    assert json.loads(response.read())["action"] == "execution_requested"
+    assert calls == {"decision_id": 2, "body": "vamos con tu plan"}
+
+
 def test_council_con_stalemate_arbitra(ui_server_conn, monkeypatch):
     port, _, conn = ui_server_conn
     conn.decisions = [_decision(3, status="split", round=3)]
@@ -542,14 +562,14 @@ def test_council_sin_decision_abierta_abre_una_nueva(ui_server_conn):
     assert started["protocol"] == "adaptive"
 
 
-def test_council_con_repo_y_flag_abre_decision_production(ui_server_conn):
-    """Modo producción desde la caja única: repo + checkbox llegan a
-    start_decision como artifact + production."""
+def test_council_con_peticion_de_implementacion_evoluciona_a_production(ui_server_conn):
+    """La caja única infiere ejecución de una petición explícita; no hay
+    checkbox que el operador deba anticipar antes de conversar."""
     port, started, conn = ui_server_conn
     conn.decisions = [_decision(1, status="closed", ruling="yes")]
     resp = _post(port, "/message", {
         "mode": "council", "body": "implementar el parser",
-        "artifact": "C:/src/otro-repo", "production": True,
+        "artifact": "C:/src/otro-repo",
     })
     body = json.loads(resp.read())
     assert resp.status == 201
