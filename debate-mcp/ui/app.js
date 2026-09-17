@@ -255,6 +255,30 @@ function renderSummary(d) {
     ? `${voted.length} of ${(d.seats || []).length} heads have answered. The synthesis will settle when the round closes.`
     : d.status === "split" ? "The perspectives do not converge. Read the three reasons below, then choose how to continue."
     : "La respuesta conjunta todavía no está disponible para esta conversación. Los aportes completos están disponibles abajo.";
+  if (d.status === "executing") {
+    const activity = d.execution_activity;
+    if (activity) {
+      const elapsed = activity.started_at
+        ? Math.max(0, Math.round((Date.now() - Date.parse(activity.started_at)) / 1000)) : 0;
+      const worker = String(activity.seat || "executor").toUpperCase();
+      title.textContent = `${worker} ESTÁ TRABAJANDO`;
+      lead.textContent = `${worker} está implementando el plan en la rama aislada. Lleva ${elapsed}s en ejecución.`;
+      meta.textContent = `PROCESO ACTIVO · PID ${activity.pid || "iniciando"} · ${activity.log || "preparando registro"}`;
+      const progress = document.createElement("p");
+      progress.className = "execution-progress";
+      progress.textContent = "La pantalla se actualiza automáticamente. Al terminar, el consejo revisará el diff antes de integrar cambios.";
+      content.append(progress);
+    } else if (d.execution_state === "pending") {
+      title.textContent = "EJECUCIÓN EN COLA";
+      lead.textContent = "El plan está aprobado y espera un proceso ejecutor disponible.";
+    } else if (d.execution_state === "reviewing") {
+      title.textContent = "IMPLEMENTACIÓN TERMINADA · EN REVISIÓN";
+      lead.textContent = "El ejecutor terminó y el consejo está revisando el diff antes de integrarlo.";
+    } else if (d.execution_state === "failed") {
+      title.textContent = "LA EJECUCIÓN NECESITA ATENCIÓN";
+      lead.textContent = "El proceso terminó sin una implementación válida. El detalle y la opción de reintento están en la conversación.";
+    }
+  }
   const synthesis = d.synthesis;
   if (Object.keys(d.turn_errors || {}).length) {
     title.textContent = "Una cabeza no pudo completar su turno";

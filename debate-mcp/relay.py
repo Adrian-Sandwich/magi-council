@@ -1163,6 +1163,9 @@ def process_cycle(conn, state: dict) -> None:
     # no reciben turnos de cabeza; esperan (o corren) al ejecutor.
     for d in fetch_executing_decisions(conn):
         token = _token(d["thread"], "executor")
+        ts = thread_state(state, d["thread"])
+        if ts.get("phase") != "execution":
+            ts.update(phase="execution", triggers=0, capped_notified=False)
         with _inflight_lock:
             busy = token in _inflight
             total = len(_inflight)
@@ -1170,7 +1173,6 @@ def process_cycle(conn, state: dict) -> None:
             break
         if busy or _ejecucion_gestionada(conn, d["thread"]):
             continue
-        ts = thread_state(state, d["thread"])
         cwd = resolve_cwd(conn, d["thread"], ts)
         if cwd and fire_executor_turn(d, cwd):
             ts["triggers"] += 1
@@ -1353,7 +1355,7 @@ def _execution_failed(d: dict, detail: str) -> None:
             conn.execute(
                 """UPDATE decisions SET minority_report =
                    COALESCE(minority_report, '{}'::jsonb) ||
-                   '{"execution_state": "failed"}'::jsonb
+                   '{"execution_state": "failed", "execution_activity": null}'::jsonb
                    WHERE id = %s AND status = 'executing'""", (d["id"],),
             )
             conn.execute(
@@ -1365,13 +1367,14 @@ def _execution_failed(d: dict, detail: str) -> None:
 
 def _execute_plan(d: dict, cwd: str) -> None:
     start = time.monotonic()
-    meta = {"thread": d["thread"], "author": "executor",
+    meta = {"thread": d["thread"],
             "token": _token(d["thread"], "executor"),
             "decision_id": d["id"], "turn": "execute"}
     try:
         seat = executor_seat()
         if seat is None:
             raise RuntimeError("ningun asiento puede ejecutar (sin binario en el registry)")
+        meta["author"] = seat["seat"]
         if seat.get("type", "cli") == "cli" and not Path(seat["bin"]).exists():
             # Fallar ACÁ, antes de crear la rama/worktree: el binario ausente
             # no es razón para churn de git ni para reintentos calientes.
@@ -1397,8 +1400,7 @@ def _execute_plan(d: dict, cwd: str) -> None:
         out_path = LOG_DIR / f"execute_{d['thread']}_{ts_label}.log"
         log.info("ejecutando plan de %s en %s (%s) -> %s",
                  d["thread"], cwd, seat["seat"], out_path.name)
-        event("trigger_spawned", pid=None, thread=d["thread"], author=seat["seat"],
-              decision_id=d["id"], round=d.get("round"), turn="execute")
+        event("trigger_spawned", pid=None, round=d.get("round"), **meta)
         timed_out = False
         with out_path.open("w", encoding="utf-8") as f:
             _prune_trigger_logs(f"execute_{d['thread']}_")
@@ -1409,6 +1411,16 @@ def _execute_plan(d: dict, cwd: str) -> None:
             )
             with _procs_lock:
                 _procs[meta["token"]] = proc
+            activity = {
+                "seat": seat["seat"], "started_at": now_iso(), "pid": proc.pid,
+                "turn": "execute", "log": out_path.name,
+            }
+            with connect() as conn:
+                conn.execute(
+                    "UPDATE decisions SET minority_report = minority_report || %s::jsonb WHERE id = %s",
+                    (Json({"execution_activity": activity}), d["id"]),
+                )
+            event("trigger_pid", pid=proc.pid, **meta)
             try:
                 rc = proc.wait(timeout=seat.get("exec_timeout_secs", EJECUTOR_TIMEOUT_SECS))
             except subprocess.TimeoutExpired:
@@ -1427,7 +1439,12 @@ def _execute_plan(d: dict, cwd: str) -> None:
         # exito: diff de la rama y decision de revision con el diff en el journal
         reviewed_sha, diff = production.review_target(run)
         if not diff:
-            diff = "(sin cambios: la rama no difiere de la base)"
+            detail = (f"el ejecutor ({seat['seat']}) terminó sin producir cambios. "
+                      f"Log: {out_path.name}")
+            _execution_failed(d, detail)
+            event("trigger_done", rc=1, timed_out=False, error="sin cambios",
+                  duration_s=round(time.monotonic() - start, 1), **meta)
+            return
         diff = diff[:DIFF_CHARS]
         with connect() as conn:
             with conn.transaction():
@@ -1452,7 +1469,8 @@ def _execute_plan(d: dict, cwd: str) -> None:
                 run.update(review_id=rev["decision_id"], reviewed_sha=reviewed_sha)
                 conn.execute(
                     "UPDATE decisions SET minority_report = minority_report || %s::jsonb WHERE id = %s",
-                    (Json({"execution": run, "execution_state": "reviewing"}), d["id"]),
+                    (Json({"execution": run, "execution_state": "reviewing",
+                           "execution_activity": None}), d["id"]),
                 )
                 conn.execute(
                     """

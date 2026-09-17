@@ -562,6 +562,8 @@ body {
 #outcome-form textarea { display: block; box-sizing: border-box; width: 100%; margin-top: 5px; }
 .summary-meta { color: #ffb454; font-size: 12px; letter-spacing: .04em; }
 .summary-conditions { border-left: 3px solid #52e691; color: #bfe9ca; line-height: 1.5; margin-top: 12px; padding: 7px 10px; }
+.execution-progress { border-left: 3px solid #ffb454; color: #f2dfc5; padding: 8px 10px; animation: pulse-work 1.8s ease-in-out infinite; }
+@keyframes pulse-work { 50% { opacity: .58; } }
 .summary-seats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 14px; }
 .summary-seat { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; min-width: 0; border: 1px solid color-mix(in srgb, var(--seat-color) 70%, #6b451f); border-left: 4px solid var(--seat-color); background: #080604; padding: 9px 10px; text-align: left; }
 .summary-seat-name { color: var(--seat-color); font-size: 11px; letter-spacing: .08em; }

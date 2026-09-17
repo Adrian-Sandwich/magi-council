@@ -179,6 +179,18 @@ def test_build_state_marca_votos_de_la_ronda_actual():
     assert seats["casper"]["conditions"] == ["ver egress"]
 
 
+def test_build_state_conserva_actividad_persistida_del_ejecutor(tmp_path, monkeypatch):
+    activity = {"seat": "balthasar", "pid": 4321,
+                "started_at": "2026-09-17T23:00:00+00:00", "turn": "execute"}
+    conn = FakeUiConn()
+    conn.decisions = [_decision(3, status="executing", ruling="yes",
+                                minority_report={"execution_state": "pending",
+                                                 "execution_activity": activity})]
+    monkeypatch.setattr(magi_ui, "HEARTBEAT_PATH", tmp_path / "missing-heartbeat.json")
+    decision = magi_ui.build_state(conn)["decisions"][0]
+    assert decision["execution_activity"] == activity
+
+
 def test_build_state_trae_journal_y_cerradas():
     state = magi_ui.build_state(FakeUiConn())
     d1 = state["decisions"][1]

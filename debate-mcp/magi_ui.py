@@ -237,7 +237,8 @@ def build_state(conn) -> dict:
             "thread": r["thread"], "badge": verdict_badge(r),
             "aborted": bool(mr.get("aborted")),
             "execution_state": mr.get("execution_state"),
-            "execution_activity": activity.get(f"{r['thread']}::executor"),
+            "execution_activity": (activity.get(f"{r['thread']}::executor")
+                                   or mr.get("execution_activity")),
             "production": bool(r.get("production")),
             "approved_conditions": list(mr.get("approved_conditions") or []),
             "deferred_items": list(mr.get("deferred_items") or []),

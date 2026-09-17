@@ -46,6 +46,20 @@ def feed(page, value):
     page.evaluate("data => window.feed.onmessage({data: JSON.stringify(data)})", value)
 
 
+def test_executing_shows_live_worker_evidence(page):
+    data = snapshot("executing")
+    data["decisions"][0].update(
+        execution_state="pending",
+        execution_activity={"seat": "balthasar", "started_at": "2026-09-17T23:00:00Z",
+                            "pid": 4321, "turn": "execute", "log": "execute_d4.log"},
+    )
+    feed(page, data)
+    assert page.locator("#summary-title").inner_text() == "BALTHASAR ESTÁ TRABAJANDO"
+    assert "PID 4321" in page.locator("#summary-meta").inner_text()
+    assert "rama aislada" in page.locator("#summary-lead").inner_text()
+    assert "actualiza automáticamente" in page.locator(".execution-progress").inner_text()
+
+
 def test_joint_answer_replaces_transcript_and_marks_partial_review(page):
     data = snapshot('closed')
     d = data['decisions'][0]

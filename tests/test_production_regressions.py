@@ -49,6 +49,7 @@ def test_executor_receives_conditions_from_all_current_conditional_votes(votes):
 
 def test_inline_timeout_kills_and_reaps_before_unregistering(monkeypatch, tmp_path):
     proc = Mock()
+    proc.pid = 1234
     proc.wait.side_effect = [subprocess.TimeoutExpired("stub", 1), -9]
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: proc)
     killed = []
@@ -108,6 +109,7 @@ def test_abort_durante_la_publicacion_cierra_el_evento_del_disparo(monkeypatch, 
     monkeypatch.setattr(relay.production, "review_target", lambda run: ("sha1", "diff"))
 
     proc = Mock()
+    proc.pid = 1234
     proc.wait.return_value = 0
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: proc)
 

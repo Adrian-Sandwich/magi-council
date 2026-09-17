@@ -22,7 +22,9 @@
       "args": [
         "exec",
         "-m",
-        "gpt-5.6-luna"
+        "gpt-5.6-luna",
+        "--sandbox",
+        "workspace-write"
       ],
       "timeout_secs": 900,
       "synthesis_priority": 20,
