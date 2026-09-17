@@ -101,11 +101,14 @@ def test_abort_durante_la_publicacion_cierra_el_evento_del_disparo(monkeypatch, 
     monkeypatch.setattr(relay, "LOG_DIR", tmp_path)
     monkeypatch.setattr(relay.heads, "load", lambda: [
         {"seat": "ejec", "name": "x", "type": "cli", "executor": True,
-         "bin": sys.executable, "args": []},
+         "bin": sys.executable, "args": [],
+         "execution_args": ["--workspace", "{git_common_dir}"]},
     ])
     monkeypatch.setattr(relay.production, "plan",
-                        lambda cwd, did, prev: {"branch": "magi/d1", "base_branch": "main"})
+                        lambda cwd, did, prev: {"branch": "magi/d1", "base_branch": "main",
+                                                "repo": str(tmp_path)})
     monkeypatch.setattr(relay.production, "prepare", lambda run: str(tmp_path))
+    monkeypatch.setattr(relay.production, "common_dir", lambda repo: "C:/git/common")
     monkeypatch.setattr(relay.production, "review_target", lambda run: ("sha1", "diff"))
 
     proc = Mock()
@@ -140,6 +143,7 @@ def test_abort_durante_la_publicacion_cierra_el_evento_del_disparo(monkeypatch, 
     assert len(done) == 1, "el disparo se cerró una sola vez"
     assert done[0]["rc"] == -1 and "abortado" in done[0]["error"]
     assert spawned["command"][-1] == "-", "Codex recibe el prompt multilínea por stdin"
+    assert spawned["command"][-3:-1] == ["--workspace", "C:/git/common"]
     assert spawned["stdin"] is not None
     assert not any("EJECUCIÓN FALLIDA" in str(c.args)
                    for c in conn.execute.call_args_list), "el abort no es un fallo"

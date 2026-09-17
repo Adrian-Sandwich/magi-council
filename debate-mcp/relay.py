@@ -1409,7 +1409,11 @@ def _execute_plan(d: dict, cwd: str) -> None:
             _prune_trigger_logs(f"execute_{d['thread']}_")
             pin = Path(tmp) / "prompt.txt"
             pin.write_text(prompt, encoding="utf-8")
-            command = [seat["bin"], *seat.get("args", [])]
+            execution_args = [
+                str(arg).replace("{git_common_dir}", production.common_dir(run["repo"]))
+                for arg in seat.get("execution_args", [])
+            ]
+            command = [seat["bin"], *seat.get("args", []), *execution_args]
             transport = seat.get("prompt_transport", "stdin")
             if transport == "file":
                 command.append(f"Read the UTF-8 task file at {pin} and follow every instruction in it.")
