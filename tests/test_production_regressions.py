@@ -109,6 +109,7 @@ def test_abort_durante_la_publicacion_cierra_el_evento_del_disparo(monkeypatch, 
                                                 "repo": str(tmp_path)})
     monkeypatch.setattr(relay.production, "prepare", lambda run: str(tmp_path))
     monkeypatch.setattr(relay.production, "common_dir", lambda repo: "C:/git/common")
+    monkeypatch.setattr(relay.production, "commit_execution", lambda run, message: "sha1")
     monkeypatch.setattr(relay.production, "review_target", lambda run: ("sha1", "diff"))
 
     proc = Mock()

@@ -69,6 +69,25 @@ def review_target(run: dict) -> tuple[str, str]:
     return sha, diff
 
 
+def commit_execution(run: dict, message: str) -> str:
+    """Record an executor's workspace edits without giving the model Git access."""
+    worktree = run["worktree"]
+    if git(worktree, "symbolic-ref", "--short", "HEAD") != run["branch"]:
+        raise RuntimeError("el ejecutor cambió de rama")
+    git(worktree, "merge-base", "--is-ancestor", run["base_sha"], "HEAD")
+    if not git(worktree, "status", "--porcelain", "--untracked-files=all"):
+        sha = git(worktree, "rev-parse", "HEAD")
+        if sha == run["base_sha"]:
+            raise RuntimeError("el ejecutor terminó sin producir cambios")
+        return sha  # compatible with executors that can and do commit themselves
+    git(worktree, "add", "-A")
+    if not git(worktree, "diff", "--cached", "--name-only"):
+        raise RuntimeError("los cambios del ejecutor están ignorados y no pueden revisarse")
+    git(worktree, "-c", "core.hooksPath=", "-c", "user.name=MAGI Executor", "-c",
+        "user.email=magi@localhost", "commit", "--no-gpg-sign", "-m", message)
+    return git(worktree, "rev-parse", "HEAD")
+
+
 def merge_reviewed(run: dict, message: str) -> str:
     """Merge exactly the approved SHA, only into the unchanged clean base.
 

@@ -65,6 +65,18 @@ def test_retry_preserves_base_and_uncommitted_execution(repo):
     assert (Path(worktree) / "unfinished.txt").read_text() == "keep this"
 
 
+def test_relay_commits_executor_workspace_without_model_git_access(repo):
+    run = production.plan(repo, 42)
+    worktree = production.prepare(run)
+    (Path(worktree) / "app.txt").write_text("implemented by model\n")
+    (Path(worktree) / "new.txt").write_text("new file\n")
+    sha = production.commit_execution(run, "MAGI execution")
+    assert sha == production.git(worktree, "rev-parse", "HEAD")
+    assert production.git(worktree, "status", "--porcelain") == ""
+    reviewed_sha, diff = production.review_target(run)
+    assert reviewed_sha == sha and "implemented by model" in diff and "new file" in diff
+
+
 def test_existing_unowned_branch_is_not_adopted(repo):
     production.git(repo, "branch", "magi/d42")
     run = production.plan(repo, 42)

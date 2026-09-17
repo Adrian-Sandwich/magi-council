@@ -1330,8 +1330,9 @@ def _prompt_ejecucion(d: dict, base: str, condiciones: list[str]) -> str:
         f"desde '{base}'. No cambies de rama ni de worktree. "
         f"Si hay cambios de un intento anterior, inspeccionalos y continuá.\n"
         f"2. Implementá el plan respetando las condiciones.\n"
-        f"3. Commiteá TODO en '{rama}' con mensajes descriptivos. "
-        f"NO merges, NO push, NO toques otras ramas.\n"
+        f"3. No uses git add, git commit, git merge ni git push: el relay validará "
+        f"y registrará tus cambios al terminar. Si creás archivos, verificá con "
+        f"git check-ignore que no queden ignorados. No toques otras ramas.\n"
         f"4. Terminá con un resumen: archivos tocados y decisiones de "
         f"implementación que tomaste."
     )
@@ -1453,6 +1454,9 @@ def _execute_plan(d: dict, cwd: str) -> None:
             event("trigger_done", rc=rc, timed_out=timed_out,
                   duration_s=round(time.monotonic() - start, 1), **meta)
             return
+        # El modelo sólo necesita escribir el worktree. El relay posee el índice
+        # Git y registra el resultado, igual para cualquier proveedor ejecutor.
+        production.commit_execution(run, f"MAGI: ejecución del plan #{d['id']}")
         # exito: diff de la rama y decision de revision con el diff en el journal
         reviewed_sha, diff = production.review_target(run)
         if not diff:

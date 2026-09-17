@@ -26,10 +26,6 @@
         "--sandbox",
         "workspace-write"
       ],
-      "execution_args": [
-        "--add-dir",
-        "{git_common_dir}"
-      ],
       "timeout_secs": 900,
       "synthesis_priority": 20,
       "executor": true,
