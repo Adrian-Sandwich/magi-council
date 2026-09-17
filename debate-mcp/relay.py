@@ -1323,6 +1323,8 @@ def _prompt_ejecucion(d: dict, base: str, condiciones: list[str]) -> str:
         f"Petición original: {d['title']}\n"
         f"Condiciones impuestas por el consejo: {cond}\n"
         f"Repositorio de trabajo: tu worktree aislado (directorio actual).\n\n"
+        f"ALCANCE ESTRICTO: implementá solamente el plan aprobado y sus condiciones. "
+        f"La petición original es contexto histórico, no autoriza mejoras adicionales.\n\n"
         f"Instrucciones:\n"
         f"1. Ya estás en la rama '{rama}', en un worktree creado por MAGI "
         f"desde '{base}'. No cambies de rama ni de worktree. "

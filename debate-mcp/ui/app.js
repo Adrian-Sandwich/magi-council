@@ -85,7 +85,9 @@ function thinkingSeats(d) {
 // ------------------------------------------------------------- magi
 
 function renderMagi(d) {
-  const signature = JSON.stringify(d ? [d.id, d.round, d.status, d.badge, d.seats] : null);
+  const activeExecution = d?.status === "executing" ? d.execution_activity : null;
+  const tick = activeExecution ? Math.floor(Date.now() / 5000) : 0;
+  const signature = JSON.stringify(d ? [d.id, d.round, d.status, d.badge, d.seats, activeExecution, tick] : null);
   if (signature === magiSignature) return;
   magiSignature = signature;
   const magi = document.getElementById("magi");
@@ -102,24 +104,36 @@ function renderMagi(d) {
   status.className = "system-status";
   const ext = d ? `${String(d.protocol).toUpperCase()} · ROUND ${d.round}` : "STANDBY";
   status.innerHTML = `<div>${esc(ext)}</div>`;
+  if (activeExecution) {
+    const elapsed = activeExecution.started_at
+      ? Math.max(0, Math.round((Date.now() - Date.parse(activeExecution.started_at)) / 1000)) : 0;
+    const phases = ["READING APPROVED PLAN", "INSPECTING ISOLATED WORKTREE", "APPLYING AND VERIFYING CHANGES"];
+    const phase = activeExecution.phase || phases[Math.floor(elapsed / 8) % phases.length];
+    const line = document.createElement("div");
+    line.className = "execution-script";
+    line.textContent = `▸ ${String(activeExecution.seat || "executor").toUpperCase()}: ${phase} · ${elapsed}s`;
+    status.appendChild(line);
+  }
   magi.appendChild(status);
 
   (d?.seats ?? SLOTS.map(seat => ({seat, voted:false}))).slice(0, 3).forEach((seat, i) => {
     const slot = SLOTS[i];
     const isThinking = thinking.includes(seat.seat);
-    const color = seat.voted ? POSITION_COLORS[seat.position] : POSITION_COLORS.pending;
+    const isExecuting = activeExecution?.seat === seat.seat;
+    const color = isExecuting ? SEAT_COLORS[seat.seat]
+      : seat.voted ? POSITION_COLORS[seat.position] : POSITION_COLORS.pending;
     const outer = document.createElement("div");
-    outer.className = `wise-man ${slot}`;
+    outer.className = `wise-man ${slot}${isExecuting ? " executor-active" : ""}`;
     const inner = document.createElement("div");
     inner.className = "inner" + (isThinking ? " flicker" : "");
     inner.style.background = color;
     if (seat.voted && ["yes", "conditional", "info"].includes(seat.position)) inner.style.color = "#080604";
     inner.textContent = `${seat.seat.toUpperCase()} • ${i + 1}`;
     outer.appendChild(inner);
-    if (isThinking || seat.error) {
+    if (isThinking || isExecuting || seat.error) {
       const tag = document.createElement("div");
       tag.className = "thinking-tag";
-      tag.textContent = seat.error ? "ERROR" : "THINKING";
+      tag.textContent = seat.error ? "ERROR" : isExecuting ? "EXECUTING" : "THINKING";
       outer.appendChild(tag);
     }
     outer.addEventListener("click", () => openModal(seat));

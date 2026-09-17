@@ -142,6 +142,15 @@ body {
     margin-left: 0;
 }
 
+.magi>.system-status>.execution-script {
+    color: #52e691;
+    font-size: 2.45cqh;
+    margin: .7cqh 0 0 0;
+    max-width: 31cqw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 .magi>.response {
     grid-area: response;
     justify-self: flex-end;
@@ -635,7 +644,13 @@ dialog::backdrop { background: #000b; }
 .modal .modal-body { overflow-wrap: anywhere; }
 .flicker { animation: operator-pulse 2.5s ease-in-out infinite; }
 @keyframes operator-pulse { 50% { opacity: .65; } }
-@media (prefers-reduced-motion: reduce) { .flicker, .thinking-line, .thinking-tag { animation: none; } }
+@keyframes executor-signal {
+  0%, 100% { filter: brightness(.72); box-shadow: inset 0 0 0 #fff0, 0 0 5px #ff8d00; }
+  50% { filter: brightness(1.38); box-shadow: inset 0 0 22px #fff8, 0 0 24px #ff8d00; }
+}
+.magi>.wise-man.executor-active>.inner { animation: executor-signal .72s infinite step-end; }
+.magi>.wise-man.executor-active { box-shadow: 0 0 18px #ff8d00; }
+@media (prefers-reduced-motion: reduce) { .flicker, .thinking-line, .thinking-tag, .executor-active > .inner { animation: none; } }
 @media (max-width: 600px) {
   body { margin: 5px; }
   .system { padding: 10px; }

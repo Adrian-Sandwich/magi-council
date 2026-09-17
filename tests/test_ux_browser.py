@@ -58,6 +58,9 @@ def test_executing_shows_live_worker_evidence(page):
     assert "PID 4321" in page.locator("#summary-meta").inner_text()
     assert "rama aislada" in page.locator("#summary-lead").inner_text()
     assert "actualiza automáticamente" in page.locator(".execution-progress").inner_text()
+    assert page.locator(".wise-man.balthasar").get_attribute("class").endswith("executor-active")
+    assert page.locator(".wise-man.balthasar .thinking-tag").inner_text() == "EXECUTING"
+    assert "BALTHASAR:" in page.locator(".system-status .execution-script").inner_text()
 
 
 def test_joint_answer_replaces_transcript_and_marks_partial_review(page):
