@@ -204,6 +204,10 @@ def build_chat_prompt(seat: str, journal: list[dict], artifact: str | None = Non
     question = next((m.get('body') or '' for m in reversed(journal)
                      if m.get('author') == 'adrian'), '')
     memory = memory_ctx.memoria_para(question, artifact, thread=thread) if question else ''
+    if artifact:
+        brief = memory_ctx.repo_brief(artifact)
+        if brief:
+            memory = (brief + '\n\n' + memory).strip()
     history = _history(journal, "(conversación vacía)")
     system = (
         f"{persona}\n\n"

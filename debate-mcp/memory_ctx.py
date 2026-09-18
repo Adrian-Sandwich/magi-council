@@ -17,8 +17,23 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_DB = BASE_DIR.parent / 'memory-graph' / 'memory.db'
 DB_PATH = Path(os.environ.get('MEMORY_GRAPH_DB', DEFAULT_DB))
-MAX_HITS = 8
-MAX_CHARS = 6500
+# Presupuesto: 5 dossiers y 4500 chars (~1.100 tokens por cabeza y turno; eran
+# 8 y 6500). En la evaluación con seguimientos reales el dossier correcto
+# está en el top-3 el 89 % de las veces: del cuarto en adelante es relleno caro.
+MAX_HITS = 5
+MAX_CHARS = 4500
+HIT_MAX_CHARS = 1500   # por dossier: antes uno solo podía llenar el bloque entero
+EVIDENCE_CHARS = 300   # por cita de evidencia (antes 450)
+# Umbral de relevancia. Antes bastaba cualquier puntaje > 0: un nodo del
+# mismo repositorio sin ninguna palabra en común entraba igual, y el bloque
+# salía siempre lleno (6.4–6.5k chars en 14 decisiones seguidas). Ahora un
+# nodo entra si comparte el thread, coincide en el título, coincide en al
+# menos dos términos del contenido o es semánticamente cercano.
+MIN_CONTENT_MATCHES = 2
+SELECTIVE = os.environ.get('MEMORY_SELECTIVE', '1') != '0'  # 0 = comportamiento anterior (para comparar)
+CODE_CACHE =Path(os.environ.get('CODEBASE_MEMORY_CACHE', Path.home() / '.cache' / 'codebase-memory-mcp'))
+BRIEF_MAX_CHARS = 1800
+BRIEF_TOP_FILES = 8
 STOPWORDS = set('para sobre como esta este esto estas estos quiero cual cuales donde cuando desde hasta entre consejo decision sistema pregunta prueba votad voten argumenten otra otra vez with that this from what have does'.split())
 log = logging.getLogger(__name__)
 
@@ -84,13 +99,18 @@ def retrieve(query, artifact=None, thread=None):
                     experience = p.get('experience') or {}
                     report = experience.get('latest_report') or {}
                     content.update(_terminos(' '.join(report.get(k, '') for k in ('observation','evidence','lesson')), None))
-                    matches = len(terms & title) * 4 + len(terms & content)
+                    title_hits = len(terms & title)
+                    content_hits = len(terms & content)
+                    matches = title_hits * 4 + content_hits
                     similarity, fingerprint = semantic.get(row['id'], (0, None))
                     if similarity and fingerprint != semantic_memory.digest(semantic_memory.documents(row['label'], p)):
                         similarity = 0  # Changed content must be reindexed first.
-                    score = 100 * same_thread + 20 * same_repo + matches + similarity * 8
-                    if not score:
+                    needed = 1 if same_repo else MIN_CONTENT_MATCHES
+                    if SELECTIVE and not (same_thread or title_hits or content_hits >= needed or similarity):
+                        continue  # mismo repositorio sin tema en común no es memoria, es relleno
+                    if not (same_thread or same_repo or matches or similarity):
                         continue
+                    score = 100 * same_thread + 20 * same_repo + matches + similarity * 8
                     # last_at is event time; updated_at can be only ingestion time.
                     date = p.get('last_at') or p.get('first_at') or row['updated_at']
                     yield {'id': row['id'], 'label': row['label'], 'domain': row['domain'],
@@ -120,6 +140,107 @@ def retrieve(query, artifact=None, thread=None):
     except sqlite3.Error as exc:
         log.warning('Knowledge memory unavailable: %s', exc)
         return []
+
+
+def _code_project_for(artifact):
+    """Nombre del proyecto en codebase-memory cuyo root contiene `artifact`,
+    leyendo los SQLite del cache (sin pasar por MCP). None si no está indexado."""
+    repo = _path(artifact)
+    if not repo or not CODE_CACHE.exists():
+        return None
+    best = None
+    for db_path in CODE_CACHE.glob('*.db'):
+        if db_path.stem == '_config':
+            continue
+        try:
+            with closing(sqlite3.connect(f'file:{db_path.as_posix()}?mode=ro', uri=True, timeout=2)) as conn:
+                rows = conn.execute('SELECT name, root_path FROM projects').fetchall()
+        except sqlite3.Error:
+            continue
+        for name, root in rows:
+            root = _path(root)
+            if root and (repo == root or repo.startswith(root + '/')):
+                if best is None or len(root) > len(best[1]):
+                    best = (name, root)
+    return best[0] if best else None
+
+
+def repo_brief(artifact):
+    """Mapa breve del repositorio desde el grafo de código: tamaño, carpetas,
+    entradas HTTP, archivos más referenciados y más cambiados. Se inyecta en
+    la ronda 1 para que una cabeza con herramientas lea lo que importa en
+    vez de explorar a ciegas (Melchior gastaba 66–156 s por turno en eso).
+    Vacío si el repositorio no está indexado. No sustituye leer el archivo."""
+    project = _code_project_for(artifact)
+    if not project or not DB_PATH.exists():
+        return ''
+    try:
+        with closing(sqlite3.connect(DB_PATH.resolve().as_uri() + '?mode=ro', uri=True, timeout=2)) as conn:
+            rows = conn.execute(
+                "SELECT id, label, tag, props FROM nodes WHERE domain='code' AND json_extract(props, '$.project') = ?",
+                (project,)).fetchall()
+            if not rows:
+                return ''
+            nodes = {r[0]: (r[1], r[2], _props(r[3])) for r in rows}
+            ids = list(nodes)
+            calls = {}
+            for i in range(0, len(ids), 500):
+                chunk = ids[i:i + 500]
+                for (to_id,) in conn.execute(
+                        f"SELECT to_id FROM edges WHERE type='CALLS' AND to_id IN ({','.join('?' * len(chunk))})", chunk):
+                    calls[to_id] = calls.get(to_id, 0) + 1
+            updated = conn.execute("SELECT finished_at FROM ingest_runs WHERE source='ingest_code'").fetchone()
+    except sqlite3.Error as exc:
+        log.warning('Repo brief unavailable: %s', exc)
+        return ''
+    counts = {}
+    per_file = {}
+    files = {}
+    routes = []
+    folders = []
+    for node_id, (label, tag, p) in nodes.items():
+        path = (p.get('file_path') or '').replace('\\', '/')
+        if not path or path.startswith('<'):
+            continue  # builtins y símbolos sin archivo no son parte del repo
+        counts[tag] = counts.get(tag, 0) + 1
+        if tag == 'File':
+            files[path] = p
+        elif tag == 'Folder':
+            folders.append(label)
+        elif tag == 'Route':
+            routes.append(f"{label} ({path})")  # una ruta sin archivo es un string de test, no una entrada
+        elif tag in ('Function', 'Method', 'Class'):
+            stats = per_file.setdefault(path, {'defs': 0, 'calls': 0})
+            stats['defs'] += 1
+            stats['calls'] += calls.get(node_id, 0)
+    if not files and not per_file:
+        return ''
+    # Los tests se cuentan aparte: en el ranking taparían al código que se debate.
+    is_test = lambda path: path.startswith('tests/') or '/tests/' in path or path.startswith('test_')
+    ranked = sorted(((path, s) for path, s in per_file.items() if not is_test(path)),
+                    key=lambda kv: (-kv[1]['calls'], -kv[1]['defs'], kv[0]))[:BRIEF_TOP_FILES]
+    n_tests = sum(1 for path in files if is_test(path))
+    recent = sorted((p for p in files.values() if p.get('last_modified')),
+                    key=lambda p: -float(p.get('last_modified') or 0))[:5]
+    when = ''
+    if updated and updated[0]:
+        import datetime
+        when = datetime.datetime.fromtimestamp(updated[0]).strftime('%Y-%m-%d %H:%M')
+    lines = [f"Mapa del repositorio (grafo de código{', actualizado ' + when if when else ''}): "
+             f"{len(files)} archivos ({n_tests} de tests), {counts.get('Function', 0) + counts.get('Method', 0)} funciones, "
+             f"{counts.get('Class', 0)} clases."]
+    if folders:
+        lines.append('Carpetas: ' + ', '.join(sorted(dict.fromkeys(folders))[:12]))
+    if routes:
+        lines.append('Entradas HTTP: ' + ', '.join(sorted(routes)[:8]))
+    if ranked:
+        lines.append('Archivos más referenciados (funciones · llamadas recibidas): ' + ', '.join(
+            f"{path} ({s['defs']} · {s['calls']})" for path, s in ranked))
+    if recent:
+        lines.append('Cambiados más recientemente: ' + ', '.join(p.get('file_path', '?') for p in recent))
+    lines.append('Usalo para ir directo a lo relevante; verificá leyendo el archivo antes de afirmar algo sobre él.')
+    text = '\n'.join(lines)
+    return text if len(text) <= BRIEF_MAX_CHARS else text[:BRIEF_MAX_CHARS - 1] + '…'
 
 
 def memoria_para(titulo, artifact=None, thread=None):
@@ -164,15 +285,28 @@ def memoria_con_fuentes(titulo, artifact=None, thread=None):
             state = 'vigente' if item.get('active') else 'cancelado/resuelto'
             lines.append(f"[message:{item['message_id']}; v{item['version']}; {state}] "
                          f"{item['kind']} [{item['key']}]: {_excerpt(item['text'])}")
-        for item in p.get('evidence') or []:
-            lines.append(f"[message:{item.get('id')}; {item.get('author')}; {item.get('kind')}] {_excerpt(item.get('body'))}")
+        # Evidencia acotada: el nodo guarda el último mensaje de cada autor
+        # (hasta 1800 chars cada uno) y eso llenaba el bloque con las posiciones
+        # largas de las cabezas. Del mismo thread no se repite nada: el
+        # journal ya va en el prompt. De otros dossiers, el último mensaje
+        # humano, el resultado del sistema y una sola posición de cabeza.
+        evidence = p.get('evidence') or []
+        if hit['reason'] == 'same thread':
+            evidence = []
+        else:
+            humans = [e for e in evidence if e.get('author') == 'adrian'][-1:]
+            system = [e for e in evidence if e.get('author') == 'magi' and e.get('kind') == 'resultado'][-1:]
+            heads_ = [e for e in evidence if e.get('author') not in ('adrian', 'magi')][:1]
+            evidence = humans + system + heads_
+        for item in evidence:
+            lines.append(f"[message:{item.get('id')}; {item.get('author')}; {item.get('kind')}] {_excerpt(item.get('body'), EVIDENCE_CHARS)}")
         if p.get('pending'):
             lines.append('Pendiente: ' + _excerpt(p['pending']))
         for condition in p.get('approved_conditions') or []:
             lines.append('Condición registrada: ' + _excerpt(condition, 220))
         # Keep the source heading and as many complete lines as fit, rather
         # than dropping an oversized first result and returning only a header.
-        remaining = MAX_CHARS - used - 2
+        remaining = min(MAX_CHARS - used - 2, HIT_MAX_CHARS)  # un dossier gigante no se come el bloque
         fitted = []
         for line in lines:
             cost = len(line) + (1 if fitted else 0)
