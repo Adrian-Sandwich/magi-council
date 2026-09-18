@@ -413,7 +413,10 @@ def execute_approved_decision(conn, decision_id: int, body: str) -> dict:
         conditions = list(review_report.get("approved_conditions") or [])
         synthesis = (review_report.get("synthesis") or {}).get("answer")
         plan = synthesis or (
-            f"Aplicar las condiciones aprobadas por la revisión #{decision_id}."
+            f"Aplicar las condiciones aprobadas por la revisión #{decision_id} "
+            "que pertenezcan al alcance del plan original. Los hallazgos "
+            "explícitamente diferidos o ajenos al plan se documentan, pero no "
+            "se implementan en esta ejecución."
             + ("\n- " + "\n- ".join(conditions) if conditions else "")
         )
         row = conn.execute(

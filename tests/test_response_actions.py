@@ -91,4 +91,5 @@ def test_execute_approved_review_resumes_parent_with_conditions():
     patch = update.args[1][0].obj
     assert patch["execution_state"] == "pending"
     assert patch["approved_conditions"] == ["move playtests", "add history test"]
+    assert "hallazgos explícitamente diferidos" in patch["approved_plan"]
     assert update.args[1][1] == 28

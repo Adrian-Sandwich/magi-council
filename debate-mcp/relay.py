@@ -1531,7 +1531,11 @@ def _execute_plan(d: dict, cwd: str) -> None:
                      f"Diff de la rama {rama} contra {base} (acotado a "
                      f"{DIFF_CHARS} chars). Revisá si el plan quedó bien "
                      f"implementado; los asientos CLI pueden inspeccionar el "
-                     f"repo directamente.\n\n{diff}",
+                     f"repo directamente. ALCANCE DE LA REVISIÓN: votá sólo "
+                     f"sobre el plan aprobado y sus condiciones. Podés anotar "
+                     f"hallazgos ajenos o trabajo diferido, pero no los uses "
+                     f"para un voto conditional/no ni para bloquear este merge."
+                     f"\n\n{diff}",
                      cwd),
                 )
                 conn.execute(
