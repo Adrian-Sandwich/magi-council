@@ -114,6 +114,17 @@ def test_merge_has_exact_reviewed_parents_and_recovers_idempotently(repo):
     assert production.merge_reviewed(run, "retry") == merged
 
 
+def test_merge_uses_magi_identity_when_user_has_none(repo):
+    run = implementation(repo)
+    production.git(repo, "config", "--unset", "user.name")
+    production.git(repo, "config", "--unset", "user.email")
+
+    merged = production.merge_reviewed(run, "MAGI reviewed")
+
+    assert production.git(repo, "show", "-s", "--format=%an <%ae>", merged) == \
+        "MAGI Integrator <magi@localhost>"
+
+
 @pytest.mark.parametrize("change", ["base", "branch", "dirty_base", "reviewed", "dirty_reviewed"])
 def test_changes_after_review_block_merge_without_touching_user_files(repo, change):
     run = implementation(repo)

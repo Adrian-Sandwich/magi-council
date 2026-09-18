@@ -126,7 +126,9 @@ def merge_reviewed(run: dict, message: str) -> str:
         raise RuntimeError("el worktree de integración tiene cambios; requiere inspección")
     head = git(integration, "rev-parse", "HEAD")
     if head == base:
-        git(integration, "-c", "core.hooksPath=", "merge", "--no-ff", "--no-edit", "--no-gpg-sign", source, "-m", message)
+        git(integration, "-c", "core.hooksPath=", "-c",
+            "user.name=MAGI Integrator", "-c", "user.email=magi@localhost",
+            "merge", "--no-ff", "--no-edit", "--no-gpg-sign", source, "-m", message)
         head = git(integration, "rev-parse", "HEAD")
     if git(integration, "show", "-s", "--format=%P", head).split() != [base, source]:
         raise RuntimeError("el commit de integración no corresponde a la revisión")
