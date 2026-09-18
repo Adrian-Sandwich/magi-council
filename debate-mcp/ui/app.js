@@ -995,10 +995,28 @@ events.onmessage = e => {
   document.getElementById("connection-status").textContent = "● Live";
   render();
 };
+// Si el servidor se reinició con otro token, el SSE devuelve 403 para
+// siempre y la pantalla se queda con el último estado como si estuviera
+// viva. Se comprueba el token con una petición normal y, si ya no vale, la
+// recarga trae el nuevo (index.html lo inyecta). Función suelta para que
+// los tests puedan sustituirla.
+function reloadPage() { location.reload(); }
+let tokenProbe = null;
 events.onerror = () => {
   connected = false; soundBaseline = false;
   document.getElementById("connection-status").textContent = "Reconnecting — sending paused";
   render();
+  if (tokenProbe) return;
+  tokenProbe = setTimeout(async () => {
+    tokenProbe = null;
+    try {
+      const resp = await fetch("/state", {headers: {"X-Magi-Token": MAGI_TOKEN}});
+      if (resp.status === 403) {
+        document.getElementById("connection-status").textContent = "Session expired — reloading";
+        reloadPage();
+      }
+    } catch (_) { /* sin red: EventSource sigue reintentando solo */ }
+  }, 2000);
 };
 document.getElementById("c-send").addEventListener("click", () => send());
 document.getElementById("c-input").addEventListener("input", render);

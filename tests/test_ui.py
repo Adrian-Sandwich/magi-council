@@ -940,3 +940,15 @@ def test_state_expone_fuentes_de_memoria_y_calificacion():
     d = magi_ui.build_state(conn)["decisions"][0]
     assert d["memory_sources"] == {"round": 1, "ids": ["decision:1"]}
     assert d["memory_feedback"]["useful"] is False
+
+
+def test_el_token_de_sesion_persiste_entre_reinicios(tmp_path, monkeypatch):
+    """Cuatro reinicios en una noche dejaron la pestaña abierta con un token
+    viejo: SSE 403 en silencio y una UI que parecía congelada."""
+    monkeypatch.setattr(magi_ui, "TOKEN_PATH", tmp_path / "ui_token")
+    first = magi_ui._session_token()
+    assert (tmp_path / "ui_token").read_text() == first
+    assert magi_ui._session_token() == first
+    (tmp_path / "ui_token").write_text("no válido!")
+    assert magi_ui._session_token() != first
+    assert len(magi_ui._session_token()) >= 16

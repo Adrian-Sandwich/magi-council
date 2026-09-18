@@ -363,3 +363,14 @@ def test_vote_word_failure_cue_and_mobile_live_line(page):
     size = page.locator(".magi").bounding_box()
     assert abs(size["width"] - size["height"]) < 4, "en móvil el triángulo es cuadrado para que el texto crezca"
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+
+
+def test_token_caducado_recarga_la_pagina(page):
+    """Tras un reinicio con otro token el SSE falla para siempre: la UI lo
+    detecta con una petición normal y se recarga para traer el token nuevo."""
+    page.route("**/state", lambda r: r.fulfill(status=403, body='{"error":"token"}', content_type="application/json"))
+    page.evaluate("() => { window.reloads = 0; window.reloadPage = () => window.reloads++; }")
+    page.evaluate("window.feed.onerror()")
+    page.evaluate("window.feed.onerror()")
+    page.wait_for_function("window.reloads === 1", timeout=8000)
+    assert "Session expired" in page.locator("#connection-status").inner_text()

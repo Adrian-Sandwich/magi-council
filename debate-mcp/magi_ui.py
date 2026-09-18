@@ -52,9 +52,33 @@ JOURNAL_MESSAGES = 12
 
 # Autenticación de la sesión: la UI corre en localhost sin login, así que
 # cualquier proceso local (o DNS-rebind desde el browser) podía manejar el
-# consejo y el explorador de carpetas. Token aleatorio por arranque, se
-# imprime una vez en consola y la SPA lo recibe inyectado en index.html.
-TOKEN = secrets.token_urlsafe(16)
+# consejo y el explorador de carpetas. Token aleatorio, se imprime una vez
+# en consola y la SPA lo recibe inyectado en index.html. Persiste en
+# logs/ui_token: con un token por arranque, cada reinicio dejaba las
+# pestañas abiertas con un token viejo — el SSE respondía 403 en silencio y
+# la UI parecía congelada (visto el 2026-09-17 tras cuatro reinicios).
+# Mismo modelo de amenaza: el archivo lo lee el mismo usuario que ve la consola.
+TOKEN_PATH = Path(__file__).resolve().parent / "logs" / "ui_token"
+
+
+def _session_token() -> str:
+    import re
+    try:
+        saved = TOKEN_PATH.read_text(encoding="ascii").strip()
+        if re.fullmatch(r"[A-Za-z0-9_-]{16,64}", saved):
+            return saved
+    except (OSError, UnicodeDecodeError):
+        pass
+    token = secrets.token_urlsafe(16)
+    try:
+        TOKEN_PATH.parent.mkdir(exist_ok=True)
+        TOKEN_PATH.write_text(token, encoding="ascii")
+    except OSError:
+        pass  # sin disco escribible sigue habiendo token, sólo que por arranque
+    return token
+
+
+TOKEN = _session_token()
 
 # Tamaños y ritmo del fan-out SSE: colas acotadas por cliente (una laptop
 # dormida no acumula frames infinitos), coalescencia de ráfagas NOTIFY y
