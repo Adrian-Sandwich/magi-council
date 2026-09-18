@@ -123,3 +123,60 @@ def test_graph_sin_tabla_de_corridas_no_da_ok_a_ciegas(tmp_path, monkeypatch):
     status, detail = healthcheck.check_graph()
     assert status == healthcheck.WARN
     assert "sin registro" in detail
+
+
+# ------------------------------------------------------------ asientos
+
+def _events(tmp_path, rows):
+    import json
+    from datetime import datetime, timezone
+
+    path = tmp_path / "trigger_events.jsonl"
+    now = datetime.now(timezone.utc).isoformat()
+    with path.open("w", encoding="utf-8") as f:
+        for seat, turn, rc in rows:
+            f.write(json.dumps({"ts": now, "event": "trigger_done", "author": seat, "turn": turn,
+                                "rc": rc, "timed_out": False, "duration_s": 30.0}) + "\n")
+    return path
+
+
+def _seats(monkeypatch, config):
+    import heads
+    monkeypatch.setattr(heads, "load", lambda: config)
+
+
+def test_seats_avisa_cuando_un_asiento_falla_seguido(tmp_path, monkeypatch):
+    """Melchior fallaba 26 % de sus turnos y nadie lo veía hasta abrir
+    metrics.py: cada fallo era un turno en ERROR esperando un clic."""
+    rows = [("melchior", "answer", 1)] * 4 + [("melchior", "answer", 0)] * 6
+    rows += [("casper", "cli-inline", 0)] * 10
+    _seats(monkeypatch, [{"seat": "melchior", "type": "cli", "bin": "/k"},
+                         {"seat": "casper", "type": "cli", "journal": "inline", "bin": "/c"}])
+    monkeypatch.setattr(healthcheck, "EVENTS_PATH", _events(tmp_path, rows))
+    status, detail = healthcheck.check_seats()
+    assert status == healthcheck.WARN
+    assert "melchior/answer 4/10" in detail and "casper" not in detail
+
+
+def test_seats_ignora_turnos_de_una_configuracion_anterior(tmp_path, monkeypatch):
+    """casper falló 36 % de sus turnos 'api' cuando era Ollama; hoy es claude
+    inline y esos fallos no describen al asiento actual."""
+    rows = [("casper", "api", 1)] * 8 + [("casper", "api", 0)] * 2 + [("casper", "cli-inline", 0)] * 6
+    _seats(monkeypatch, [{"seat": "casper", "type": "cli", "journal": "inline", "bin": "/c"}])
+    monkeypatch.setattr(healthcheck, "EVENTS_PATH", _events(tmp_path, rows))
+    status, detail = healthcheck.check_seats()
+    assert status == healthcheck.OK and "api" not in detail
+
+
+def test_seats_critico_y_sin_datos(tmp_path, monkeypatch):
+    rows = [("balthasar", "api", 1)] * 7 + [("balthasar", "api", 0)] * 3
+    _seats(monkeypatch, [{"seat": "balthasar", "type": "api", "model": "q", "base_url": "http://x"},
+                         {"seat": "casper", "type": "api", "model": "q", "base_url": "http://x"}])
+    monkeypatch.setattr(healthcheck, "EVENTS_PATH", _events(tmp_path, rows))
+    assert healthcheck.check_seats()[0] == healthcheck.CRIT
+    # pocos turnos: no hay estadística, no se alarma
+    monkeypatch.setattr(healthcheck, "EVENTS_PATH", _events(tmp_path, [("casper", "api", 1)] * 3))
+    status, detail = healthcheck.check_seats()
+    assert status == healthcheck.OK and "sin turnos suficientes" in detail
+    monkeypatch.setattr(healthcheck, "EVENTS_PATH", tmp_path / "no-existe.jsonl")
+    assert healthcheck.check_seats()[0] == healthcheck.OK

@@ -27,7 +27,7 @@ import sqlite3
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import psycopg  # noqa: E402
 
 from config import CONNINFO  # noqa: E402
+import metrics  # noqa: E402
 
 BASE_DIR = Path(__file__).resolve().parent
 REPO_ROOT = BASE_DIR.parent
@@ -52,6 +53,15 @@ HEARTBEAT_CRIT_SECS = 3600
 # refresh.sh corre cada hora; un día entero sin re-ingesta es un grafo mintiendo.
 GRAPH_WARN_SECS = 6 * 3600
 GRAPH_CRIT_SECS = 48 * 3600
+
+# Un asiento que falla en uno de cada tres turnos de la última semana está
+# degradado aunque el relay siga vivo: cada fallo es un turno en ERROR que
+# espera un clic humano. Con menos de SEAT_MIN_TURNS no hay estadística.
+SEAT_WINDOW_DAYS = 7
+SEAT_MIN_TURNS = 5
+SEAT_WARN_RATE = 0.30
+SEAT_CRIT_RATE = 0.60
+EVENTS_PATH = metrics.EVENTS_PATH
 
 # Una decisión abierta durante horas es el mismo síntoma que el grafo
 # envejecido: el sistema está "vivo" pero trabado. Generosos con el arranque
@@ -239,11 +249,64 @@ def check_decisions() -> tuple[str, str]:
     return OK, detail
 
 
+def _current_turns() -> dict[str, set[str]]:
+    """Qué tipos de turno corresponden a cada asiento con la configuración
+    ACTUAL de heads.json. Un asiento que cambió de proveedor (casper pasó de
+    Ollama a claude) no debe seguir alarmando por los fallos del anterior."""
+    import heads
+    turns: dict[str, set[str]] = {}
+    for seat in heads.load():
+        if seat.get("type") == "api":
+            mine = {"api", "free-api"}
+        elif seat.get("journal") == "inline":
+            mine = {"cli-inline", "free-inline"}
+        else:
+            mine = {"answer", "recast", "free"}
+        mine.add("synthesis")
+        if seat.get("executor"):
+            mine.add("execute")
+        turns[seat["seat"]] = mine
+    turns["executor"] = {"execute"}
+    return turns
+
+
+def check_seats() -> tuple[str, str]:
+    """Tasa de fallo por asiento y tipo de turno en la última semana, desde
+    logs/trigger_events.jsonl (lo mismo que imprime metrics.py), sólo para
+    las combinaciones que la configuración actual puede producir."""
+    since = datetime.now(timezone.utc) - timedelta(days=SEAT_WINDOW_DAYS)
+    summary = metrics.summarize(metrics.read_events(EVENTS_PATH, since))
+    current = _current_turns()
+    rows = [s for s in summary["seats"]
+            if s["n"] >= SEAT_MIN_TURNS and s["turn"] in current.get(s["seat"], set())]
+    if not rows:
+        return OK, f"sin turnos suficientes en {SEAT_WINDOW_DAYS} días"
+    bad = []
+    worst = OK
+    for s in sorted(rows, key=lambda s: -s["error_rate"]):
+        if s["error_rate"] >= SEAT_CRIT_RATE:
+            status = CRIT
+        elif s["error_rate"] >= SEAT_WARN_RATE:
+            status = WARN
+        else:
+            continue
+        bad.append(f"{s['seat']}/{s['turn']} {s['errors']}/{s['n']} fallos "
+                   f"({s['error_rate'] * 100:.0f}%, p50 {_human(s['p50_s'])})")
+        if _RANK[status] > _RANK[worst]:
+            worst = status
+    if bad:
+        return worst, "asiento degradado: " + "; ".join(bad) + " — ver metrics.py"
+    slowest = max(rows, key=lambda s: s["p95_s"])
+    return OK, (f"{len(rows)} combinaciones asiento/turno sin fallos notables; "
+                f"más lento {slowest['seat']}/{slowest['turn']} p95 {_human(slowest['p95_s'])}")
+
+
 CHECKS = [
     ("postgres", check_postgres),
     ("relay", check_relay),
     ("decisions", check_decisions),
     ("memory-graph", check_graph),
+    ("seats", check_seats),
 ]
 
 ICON = {OK: "ok  ", WARN: "WARN", CRIT: "CRIT"}
@@ -262,6 +325,18 @@ def notify(title: str, body: str) -> None:
             capture_output=True,
         )
     elif sys.platform == "win32":
+        # Globo de NotifyIcon (WinForms, viene con .NET): en Windows 10/11 se
+        # muestra como toast del centro de notificaciones sin módulos extra.
+        # El proceso tiene que vivir unos segundos para que el globo salga.
+        script = (
+            "Add-Type -AssemblyName System.Windows.Forms; "
+            "$n = New-Object System.Windows.Forms.NotifyIcon; "
+            "$n.Icon = [System.Drawing.SystemIcons]::Warning; $n.Visible = $true; "
+            f"$n.ShowBalloonTip(10000, '{title}', '{body}', "
+            "[System.Windows.Forms.ToolTipIcon]::Warning); Start-Sleep -Seconds 6; $n.Dispose()"
+        )
+        subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                       capture_output=True, timeout=30)
         print(f"!! {title}: {body}")
     else:
         print(f"!! {title}: {body}")
