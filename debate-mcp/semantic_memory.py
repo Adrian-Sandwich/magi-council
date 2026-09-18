@@ -14,6 +14,11 @@ from pathlib import Path
 import sqlite3
 import threading
 
+try:
+    import numpy as np
+except ImportError:  # sin fastembed no hay numpy: la búsqueda léxica sigue sola
+    np = None
+
 MODEL = 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'
 CACHE = Path(__file__).resolve().parent.parent / 'memory-graph' / 'models'
 THRESHOLD = 0.45
@@ -47,7 +52,23 @@ def documents(label, props):
 
 
 def digest(chunks):
-    return hashlib.sha256(('fastembed-0.8.0/mean/chunks-v1:' + json.dumps(chunks, ensure_ascii=False)).encode()).hexdigest()
+    # v2: vectores guardados como float32 crudo, no JSON. Cambiar la versión
+    # reindexa todo una vez y migra las filas viejas al formato nuevo.
+    return hashlib.sha256(('fastembed-0.8.0/mean/chunks-v2:' + json.dumps(chunks, ensure_ascii=False)).encode()).hexdigest()
+
+
+def pack(vectors):
+    """Matriz (n_chunks × dim) → bytes float32. JSON pesaba ~65 KB por nodo y
+    cada consulta lo parseaba entero; así son ~37 KB y se leen sin parsear."""
+    return np.asarray(list(vectors), dtype=np.float32).tobytes()
+
+
+def unpack(raw, dim):
+    """Filas nuevas (bytes) y viejas (JSON) a una matriz (n × dim). ValueError
+    si la dimensión no cuadra (vectores de otro modelo)."""
+    if isinstance(raw, (bytes, memoryview)):
+        return np.frombuffer(bytes(raw), dtype=np.float32).reshape(-1, dim)
+    return np.asarray(json.loads(raw), dtype=np.float32).reshape(-1, dim)
 
 
 def unit(vector):
@@ -70,15 +91,27 @@ def scores(conn, query):
         rows = conn.execute("SELECT v.id,v.digest,v.vectors FROM semantic_vectors v JOIN nodes n ON n.id=v.id WHERE v.model=? AND n.domain IN ('decision','debate_thread','doc')", (MODEL,)).fetchall()
         if not rows:
             return {}
+        if np is None:
+            raise ImportError('numpy')
         with _lock:
-            vector = query_vector(query)
-        result = {}
-        for row in rows:
-            vectors = json.loads(row[2])
-            similarity = max((sum(a*b for a,b in zip(vector, v)) for v in vectors if len(v) == len(vector)), default=0)
-            if similarity >= THRESHOLD:
-                result[row[0]] = (similarity, row[1])
-        return result
+            query = np.asarray(query_vector(query), dtype=np.float32)
+        ids, digests, matrices = [], [], []
+        for identifier, fingerprint, raw in rows:
+            try:
+                matrix = unpack(raw, query.shape[0])
+            except ValueError:
+                continue
+            if matrix.shape[0]:
+                ids.append(identifier); digests.append(fingerprint); matrices.append(matrix)
+        if not matrices:
+            return {}
+        # Una sola multiplicación para todos los pasajes de todos los nodos;
+        # el máximo por nodo sale de los cortes entre matrices.
+        similarities = np.concatenate(matrices) @ query
+        offsets = np.cumsum([0] + [m.shape[0] for m in matrices[:-1]])
+        best = np.maximum.reduceat(similarities, offsets)
+        return {identifier: (float(score), fingerprint)
+                for identifier, fingerprint, score in zip(ids, digests, best) if score >= THRESHOLD}
     except (ImportError, OSError, ValueError, sqlite3.Error, RuntimeError) as exc:
         log.warning('Semantic retrieval unavailable (%s); using lexical retrieval', type(exc).__name__)
         return {}
@@ -86,7 +119,7 @@ def scores(conn, query):
 
 def index(path, download=False):
     with closing(sqlite3.connect(path, timeout=10)) as conn:
-        conn.execute('CREATE TABLE IF NOT EXISTS semantic_vectors (id TEXT PRIMARY KEY, model TEXT NOT NULL, digest TEXT NOT NULL, vectors TEXT NOT NULL)')
+        conn.execute('CREATE TABLE IF NOT EXISTS semantic_vectors (id TEXT PRIMARY KEY, model TEXT NOT NULL, digest TEXT NOT NULL, vectors BLOB NOT NULL)')
         rows = conn.execute("SELECT id,label,props FROM nodes WHERE domain IN ('decision','debate_thread','doc') ORDER BY id").fetchall()
         existing = dict(conn.execute('SELECT id,digest FROM semantic_vectors WHERE model=?', (MODEL,)))
         count = 0
@@ -95,9 +128,9 @@ def index(path, download=False):
             fingerprint = digest(chunks)
             if existing.get(identifier) == fingerprint:
                 continue
-            vectors = [unit(v) for v in encoder(download).embed(chunks)]
+            vectors = pack(unit(v) for v in encoder(download).embed(chunks))
             conn.execute('INSERT OR REPLACE INTO semantic_vectors VALUES (?,?,?,?)',
-                         (identifier, MODEL, fingerprint, json.dumps(vectors)))
+                         (identifier, MODEL, fingerprint, vectors))
             # Bounded batches survive timeout/restart without losing progress.
             count += 1
             if count % 16 == 0:

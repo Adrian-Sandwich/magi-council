@@ -50,6 +50,21 @@ def changed(conn, identifier, row):
     return True
 
 
+def stale_ids(conn, marks: dict[str, str]) -> set[str]:
+    """Qué nodos hay que reconsultar en Postgres. `marks` es {id de nodo:
+    marca barata} calculada con consultas livianas (último message id del
+    thread; md5 de la fila de la decisión). Cambió la marca, o el nodo no
+    está en el grafo → hay que traer la fila completa. Sin esto, cada
+    corrida (una cada 30s desde el relay) re-agregaba todos los mensajes de
+    todos los threads, con un timeout duro de 60s esperándola crecer."""
+    conn.execute('CREATE TABLE IF NOT EXISTS debate_marks (id TEXT PRIMARY KEY, mark TEXT NOT NULL)')
+    previous = dict(conn.execute('SELECT id, mark FROM debate_marks').fetchall())
+    present = {row[0] for row in conn.execute(
+        "SELECT id FROM nodes WHERE domain IN ('debate_thread', 'decision')")}
+    return {identifier for identifier, mark in marks.items()
+            if previous.get(identifier) != mark or identifier not in present}
+
+
 def write_decision(conn, r: dict, now: str) -> None:
     """Una decisión como nodo del grafo + edge journal_of desde su thread.
 
@@ -109,8 +124,23 @@ def main() -> None:
     conn = db.connect()
     # connect_timeout acotado: sin él, un Postgres caído cuelga refresh.sh
     # ~2 minutos por corrida (mismo criterio que debate-mcp/config.py).
+    conn.execute('CREATE TABLE IF NOT EXISTS debate_checkpoints (id TEXT PRIMARY KEY, digest TEXT NOT NULL)')
     with psycopg.connect(CONNINFO, row_factory=dict_row, connect_timeout=10) as pg:
-        rows = pg.execute(
+        # Marcas baratas primero: un thread cambia sólo con mensajes nuevos;
+        # una decisión, con mensajes en su thread o con su propia fila
+        # (síntesis, estado de ejecución, continuación).
+        last_ids = {r["thread"]: r["last_id"] for r in pg.execute(
+            "SELECT thread, max(id) AS last_id FROM messages GROUP BY thread").fetchall()}
+        decision_rows = pg.execute(
+            "SELECT d.id, d.thread, md5(row_to_json(d)::text) AS digest FROM decisions d").fetchall()
+        thread_marks = {node_id(t): str(last) for t, last in last_ids.items()}
+        decision_marks = {decision_node_id(r["id"]): f"{r['digest']}:{last_ids.get(r['thread'])}"
+                          for r in decision_rows}
+        stale = stale_ids(conn, {**thread_marks, **decision_marks})
+        stale_threads = [t for t in last_ids if node_id(t) in stale]
+        stale_decisions = [r["id"] for r in decision_rows if decision_node_id(r["id"]) in stale]
+
+        rows = [] if not stale_threads else pg.execute(
             """
             WITH kc AS (
                 SELECT thread, kind, count(*) AS kind_count
@@ -128,10 +158,12 @@ def main() -> None:
                        FROM messages h WHERE h.thread=m.thread AND h.author='adrian'), '[]'::jsonb) AS human_messages,
                    (SELECT json_object_agg(kind, kind_count) FROM kc WHERE kc.thread = m.thread) AS kind_counts
             FROM messages m
+            WHERE m.thread = ANY(%s)
             GROUP BY m.thread
-            """
+            """,
+            (stale_threads,),
         ).fetchall()
-        decisions = pg.execute(
+        decisions = [] if not stale_decisions else pg.execute(
             """
             SELECT d.*,
                    COALESCE((SELECT jsonb_agg(to_jsonb(o) ORDER BY o.id) FROM decision_outcomes o WHERE o.decision_id=d.id), '[]'::jsonb) AS outcome_reports,
@@ -148,15 +180,19 @@ def main() -> None:
                        ORDER BY author,id DESC
                    ) e), '[]'::jsonb) AS evidence
             FROM decisions d
+            WHERE d.id = ANY(%s)
             ORDER BY d.id
-            """
+            """,
+            (stale_decisions,),
         ).fetchall()
 
-    seen: set[str] = set()
-    conn.execute('CREATE TABLE IF NOT EXISTS debate_checkpoints (id TEXT PRIMARY KEY, digest TEXT NOT NULL)')
+    # Lo visto sale de las consultas livianas: el barrido de nodos borrados
+    # tiene que ver el universo completo aunque sólo se reconsulten los
+    # cambiados.
+    seen: set[str] = set(thread_marks)
+    seen_decisions: set[str] = set(decision_marks)
     n = 0
     for r in rows:
-        seen.add(node_id(r["thread"]))
         n += 1
         if not changed(conn, node_id(r['thread']), r):
             continue
@@ -184,9 +220,7 @@ def main() -> None:
             },
         )
 
-    seen_decisions: set[str] = set()
     for r in decisions:
-        seen_decisions.add(decision_node_id(r["id"]))
         identifier = decision_node_id(r['id'])
         if changed(conn, identifier, r):
             write_decision(conn, r, now)
@@ -194,11 +228,17 @@ def main() -> None:
     n_swept = db.sweep_domain(conn, "debate_thread", seen)
     n_swept_decisions = db.sweep_domain(conn, "decision", seen_decisions)
     conn.execute('DELETE FROM debate_checkpoints WHERE id NOT IN (SELECT id FROM nodes)')
+    # Las marcas se confirman junto con los nodos: una corrida cortada a la
+    # mitad no deja marcas de trabajo que no se escribió.
+    conn.executemany('INSERT OR REPLACE INTO debate_marks VALUES (?, ?)',
+                     [(i, m) for i, m in {**thread_marks, **decision_marks}.items() if i in stale])
+    conn.execute('DELETE FROM debate_marks WHERE id NOT IN (SELECT id FROM nodes)')
+    db.record_run(conn, "ingest_debate")
     conn.commit()
     conn.close()
     print(
-        f"[ingest_debate] {n} threads ({n_swept} borrados), "
-        f"{len(decisions)} decisiones ({n_swept_decisions} borradas)"
+        f"[ingest_debate] {len(thread_marks)} threads ({n} reconsultados, {n_swept} borrados), "
+        f"{len(decision_marks)} decisiones ({len(decisions)} reconsultadas, {n_swept_decisions} borradas)"
     )
 
 

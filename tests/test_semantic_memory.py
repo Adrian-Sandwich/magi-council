@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -82,3 +83,38 @@ def test_real_multilingual_retrieval(graph_db, monkeypatch):
     assert semantic_hits >= 5
     assert semantic_hits > lexical_hits
     assert memory_ctx.retrieve('Receta de pastel de chocolate') == []
+
+
+def test_vectors_are_stored_as_float32_and_legacy_json_rows_still_score(graph_db, monkeypatch):
+    """Los vectores en JSON pesaban ~65 KB por nodo y cada consulta los
+    parseaba enteros en Python puro. Ahora van como float32 crudo y la
+    similitud es una multiplicación de matrices; las filas viejas en JSON
+    siguen leyéndose hasta que el índice las reemplace."""
+    import sqlite3
+
+    class Encoder:
+        def embed(self, texts):
+            return [[1, 0] for _ in texts]
+    monkeypatch.setattr(semantic, 'encoder', lambda *a: Encoder())
+    path = Path(graph_db.execute('PRAGMA database_list').fetchone()[2])
+    node(graph_db, 'nuevo', 'Acceso')
+    node(graph_db, 'viejo', 'Sesiones')
+    assert semantic.index(path) == 2
+    raw = graph_db.execute("SELECT vectors FROM semantic_vectors WHERE id='nuevo'").fetchone()[0]
+    assert isinstance(raw, bytes) and len(raw) == 2 * 4
+    # una fila del formato anterior: JSON con dos pasajes, el segundo es el que matchea
+    graph_db.execute("UPDATE semantic_vectors SET vectors=? WHERE id='viejo'",
+                     (json.dumps([[0.0, 1.0], [0.6, 0.8]]),))
+    graph_db.commit()
+
+    monkeypatch.setattr(semantic, 'query_vector', lambda q: [1.0, 0.0])
+    monkeypatch.setenv('MEMORY_SEMANTIC', '1')
+    conn = sqlite3.connect(path)
+    scores = semantic.scores(conn, 'acceso')
+    assert scores['nuevo'][0] == pytest.approx(1.0)
+    assert scores['viejo'][0] == pytest.approx(0.6)   # el máximo entre sus pasajes
+    assert set(scores) == {'nuevo', 'viejo'}
+    # vectores de otra dimensión (otro modelo) no rompen la consulta
+    graph_db.execute("UPDATE semantic_vectors SET vectors=? WHERE id='viejo'", (json.dumps([[1.0, 0.0, 0.0]]),))
+    graph_db.commit()
+    assert set(semantic.scores(conn, 'acceso')) == {'nuevo'}
