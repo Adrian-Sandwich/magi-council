@@ -47,20 +47,23 @@ def test_info_waits_for_common_answer_and_objections_feed_next_round(pg,accept,t
     with pg.transaction():
         opened=board.start_decision(pg,'¿Qué es ser humano?',protocol='adaptive')
     identifier=opened['decision_id']
-    assert cast_info_round(pg,identifier)['action'] == 'next_round'
+    # sin ronda de contraste forzada: tres `info` van directo a evaluar contenido
     assert cast_info_round(pg,identifier)['action'] == 'assess_content'
     d,version=synthesis.snapshot(pg,identifier)
-    assert d['status'] == 'open' and d['round'] == 2
+    assert d['status'] == 'open' and d['round'] == 1
     result={'status':'reviewed','answer':'Una respuesta común con límites explícitos.',
             'agreements':[],'differences':[],'open_questions':[],'cycle':1,'reviews':reviews(accept)}
     assert synthesis.finish_content(pg,identifier,version,result)
     if not accept:
-        d,_=synthesis.snapshot(pg,identifier)
-        assert d['status']=='open' and d['round']==3
-        assert pg.execute("SELECT count(*) AS n FROM messages WHERE body LIKE 'Objeción de%%'").fetchone()['n']==3
-        assert cast_info_round(pg,identifier)['action']=='assess_content'
-        _,version=synthesis.snapshot(pg,identifier)
-        assert synthesis.finish_content(pg,identifier,version,result)
+        # cada objeción abre la ronda siguiente; el presupuesto son 3 rondas
+        # por continuación humana, así que hacen falta dos objeciones para agotarlo
+        for expected_round, objections in ((2, 3), (3, 6)):
+            d,_=synthesis.snapshot(pg,identifier)
+            assert d['status']=='open' and d['round']==expected_round
+            assert pg.execute("SELECT count(*) AS n FROM messages WHERE body LIKE 'Objeción de%%'").fetchone()['n']==objections
+            assert cast_info_round(pg,identifier)['action']=='assess_content'
+            _,version=synthesis.snapshot(pg,identifier)
+            assert synthesis.finish_content(pg,identifier,version,result)
     d,_=synthesis.snapshot(pg,identifier)
     assert d['status']=='closed' and d['ruling']=='info'
     assert d['minority_report']['content_check']['state']==terminal
@@ -71,7 +74,6 @@ def test_info_waits_for_common_answer_and_objections_feed_next_round(pg,accept,t
 def test_human_context_arriving_during_review_prevents_stale_closure(pg):
     with pg.transaction():
         identifier=board.start_decision(pg,'Pregunta',protocol='adaptive')['decision_id']
-    cast_info_round(pg,identifier)
     cast_info_round(pg,identifier)
     d,version=synthesis.snapshot(pg,identifier)
     with pg.transaction():

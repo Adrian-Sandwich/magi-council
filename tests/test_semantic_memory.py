@@ -118,3 +118,28 @@ def test_vectors_are_stored_as_float32_and_legacy_json_rows_still_score(graph_db
     graph_db.execute("UPDATE semantic_vectors SET vectors=? WHERE id='viejo'", (json.dumps([[1.0, 0.0, 0.0]]),))
     graph_db.commit()
     assert set(semantic.scores(conn, 'acceso')) == {'nuevo'}
+
+
+def test_sin_numpy_el_indice_y_la_busqueda_siguen_funcionando(graph_db, monkeypatch):
+    """CI sin fastembed (y por tanto sin numpy) reventaba en pack(): el formato
+    en disco es float32 crudo y se lee y escribe con `array`; la similitud
+    cae a Python puro."""
+    import sqlite3
+    monkeypatch.setattr(semantic, 'np', None)
+
+    class Encoder:
+        def embed(self, texts):
+            return [[0.6, 0.8] for _ in texts]
+    monkeypatch.setattr(semantic, 'encoder', lambda *a: Encoder())
+    path = Path(graph_db.execute('PRAGMA database_list').fetchone()[2])
+    node(graph_db, 'a', 'Acceso')
+    assert semantic.index(path) == 1
+    raw = graph_db.execute("SELECT vectors FROM semantic_vectors WHERE id='a'").fetchone()[0]
+    assert isinstance(raw, bytes) and len(raw) == 2 * 4
+    assert semantic.unpack(raw, 2) == [[0.6000000238418579, 0.800000011920929]]
+    with pytest.raises(ValueError):
+        semantic.unpack(raw, 3)
+    monkeypatch.setattr(semantic, 'query_vector', lambda q: [0.6, 0.8])
+    monkeypatch.setenv('MEMORY_SEMANTIC', '1')
+    scores = semantic.scores(sqlite3.connect(path), 'acceso')
+    assert scores['a'][0] == pytest.approx(1.0)

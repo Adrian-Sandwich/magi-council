@@ -3,6 +3,7 @@
 No downloads during retrieval. Missing dependencies/index/model leave lexical
 retrieval available. Run this script with --download once to install the model.
 """
+from array import array
 from contextlib import closing
 from functools import lru_cache
 import hashlib
@@ -59,16 +60,33 @@ def digest(chunks):
 
 def pack(vectors):
     """Matriz (n_chunks × dim) → bytes float32. JSON pesaba ~65 KB por nodo y
-    cada consulta lo parseaba entero; así son ~37 KB y se leen sin parsear."""
-    return np.asarray(list(vectors), dtype=np.float32).tobytes()
+    cada consulta lo parseaba entero; así son ~37 KB y se leen sin parsear.
+    Sin numpy (instalación sin fastembed) se empaqueta con `array`: el
+    formato en disco es el mismo."""
+    flat = array('f')
+    for vector in vectors:
+        flat.extend(float(x) for x in vector)
+    return flat.tobytes()
 
 
 def unpack(raw, dim):
-    """Filas nuevas (bytes) y viejas (JSON) a una matriz (n × dim). ValueError
-    si la dimensión no cuadra (vectores de otro modelo)."""
+    """Filas nuevas (bytes) y viejas (JSON) a una matriz (n × dim): ndarray
+    con numpy, lista de listas sin él. ValueError si la dimensión no cuadra
+    (vectores de otro modelo)."""
     if isinstance(raw, (bytes, memoryview)):
-        return np.frombuffer(bytes(raw), dtype=np.float32).reshape(-1, dim)
-    return np.asarray(json.loads(raw), dtype=np.float32).reshape(-1, dim)
+        if np is not None:
+            return np.frombuffer(bytes(raw), dtype=np.float32).reshape(-1, dim)
+        flat = array('f')
+        flat.frombytes(bytes(raw))
+        if len(flat) % dim:
+            raise ValueError('dimensión distinta')
+        return [list(flat[i:i + dim]) for i in range(0, len(flat), dim)]
+    rows = json.loads(raw)
+    if np is not None:
+        return np.asarray(rows, dtype=np.float32).reshape(-1, dim)
+    if any(len(v) != dim for v in rows):
+        raise ValueError('dimensión distinta')
+    return [[float(x) for x in v] for v in rows]
 
 
 def unit(vector):
@@ -91,14 +109,28 @@ def scores(conn, query):
         rows = conn.execute("SELECT v.id,v.digest,v.vectors FROM semantic_vectors v JOIN nodes n ON n.id=v.id WHERE v.model=? AND n.domain IN ('decision','debate_thread','doc')", (MODEL,)).fetchall()
         if not rows:
             return {}
-        if np is None:
-            raise ImportError('numpy')
         with _lock:
-            query = np.asarray(query_vector(query), dtype=np.float32)
+            vector = query_vector(query)
+        dim = len(vector)
+        if np is None:
+            # Sin numpy: producto punto en Python. Lento a miles de nodos, pero
+            # correcto; la instalación sin fastembed tampoco tiene modelo, así
+            # que en la práctica sólo lo usan los tests.
+            result = {}
+            for identifier, fingerprint, raw in rows:
+                try:
+                    matrix = unpack(raw, dim)
+                except ValueError:
+                    continue
+                best = max((sum(a * b for a, b in zip(vector, row)) for row in matrix), default=0.0)
+                if best >= THRESHOLD:
+                    result[identifier] = (float(best), fingerprint)
+            return result
+        query = np.asarray(vector, dtype=np.float32)
         ids, digests, matrices = [], [], []
         for identifier, fingerprint, raw in rows:
             try:
-                matrix = unpack(raw, query.shape[0])
+                matrix = unpack(raw, dim)
             except ValueError:
                 continue
             if matrix.shape[0]:

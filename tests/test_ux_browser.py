@@ -134,7 +134,7 @@ def test_editorial_approval_does_not_hide_unresolved_content(page):
         'cycle':1,'reviews':[],'agreements':[],'differences':[],'open_questions':[],
         'content_state':'budget_exhausted','content_consensus':False}
     feed(page,data)
-    assert 'Sin consenso de contenido' in page.locator('#summary-title').inner_text()
+    assert 'Respuesta provisional' in page.locator('#summary-title').inner_text()
     assert 'se agotaron las rondas' in page.locator('#summary-content').inner_text()
 
 
