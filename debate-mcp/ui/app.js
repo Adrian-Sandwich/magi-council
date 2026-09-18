@@ -395,7 +395,9 @@ function renderSummary(d) {
         unavailable:"Respuesta provisional: faltó una revisión válida del contenido."};
       note.textContent = labels[synthesis.content_state] || "";
       content.prepend(note);
-      if (!synthesis.content_consensus) title.textContent += " · Sin consenso de contenido";
+      // «Sin consenso de contenido» no decía nada al operador; la nota de
+      // arriba explica el porqué (rondas agotadas, revisión faltante…).
+      if (!synthesis.content_consensus) title.textContent += " · Respuesta provisional";
     }
     for (const [key, label] of [["agreements", "Puntos compartidos"], ["differences", "Diferencias"], ["open_questions", "Qué falta resolver"]]) {
       if (!(synthesis[key] || []).length) continue;

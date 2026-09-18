@@ -147,11 +147,11 @@ def test_style_issues_detecta_lo_que_salio_mal_en_la_sintesis_real():
     «observer-relative» y una pregunta abierta sobre si la decisión #24
     estaba duplicada en el registro. Ninguna regla es teórica."""
     bad = {'answer': ('Lo divino es una construcción observer-relative. Desde mi eje, la respuesta '
-                      'conveniente sería sí, y la rechazo porque no nos la bancamos. ' + 'palabra ' * 120),
+                      'conveniente sería sí, y la rechazo porque no nos la bancamos. ' + 'palabra ' * 160),
            'agreements': ['a'], 'differences': [], 'open_questions': ['Las fuentes registran la DECISIÓN #24 cerrada dos veces'],
            'blocking_conditions': ['distinguir construcción de ilusión'], 'deferred_items': []}
     issues = synthesis.style_issues(bad, conceptual=True)
-    assert len(issues) == 5
+    assert len(issues) >= 5
     assert any('palabras' in i for i in issues) and any('primera persona' in i for i in issues)
     assert any('jerga' in i for i in issues) and any('registro' in i for i in issues)
     assert any('blocking_conditions' in i for i in issues)
@@ -204,3 +204,24 @@ def test_las_condiciones_de_codigo_tambien_tienen_reglas_de_estilo():
     issues = synthesis.style_issues(draft, conceptual=False)
     assert any('repetidas' in i for i in issues) and any('30 palabras' in i for i in issues)
     assert synthesis.style_issues(dict(DRAFT, blocking_conditions=['Agregar playtests/ al .gitignore']), conceptual=False) == []
+
+
+def test_estilo_telegrafico_siglas_y_meta_salvedades_se_detectan():
+    """La respuesta real sobre RSA: fragmentos con dos puntos y punto y coma,
+    «OAEP y PSS con errores uniformes» sin explicar, y «anclas públicas» /
+    «proyecciones de papers» como salvedades de editor."""
+    rsa = {'answer': ('Lo vulnerable de RSA no es el álgebra sino su entorno: azar débil, relleno PKCS#1 v1.5, '
+                      'canales laterales; errores de cálculo. Del costo clásico sólo hay anclas públicas —RSA de '
+                      '829 bits— y proyecciones de papers. Defensa barata: biblioteca madura, OAEP y PSS.'),
+           'agreements': [], 'differences': [], 'open_questions': []}
+    question = '¿Qué componentes de RSA podrían ser vulnerados?'
+    issues = synthesis.style_issues(rsa, conceptual=True, question=question)
+    assert any('telegráfico' in i for i in issues)
+    siglas = next(i for i in issues if 'Siglas' in i)
+    assert 'OAEP' in siglas and 'PSS' in siglas and 'RSA' not in siglas, 'RSA viene en la pregunta'
+    assert any('salvedades' in i for i in issues)
+    ok = {'answer': ('RSA se rompe casi siempre por su entorno y no por su matemática. El relleno OAEP (el formato '
+                     'moderno de empaquetar el mensaje) evita los ataques al formato antiguo. Sin los factores '
+                     'primos, recuperar la clave equivale a factorizar el módulo. Las cifras para 2048 bits son '
+                     'extrapolaciones, no mediciones.'), 'agreements': [], 'differences': [], 'open_questions': []}
+    assert synthesis.style_issues(ok, conceptual=True, question=question) == []

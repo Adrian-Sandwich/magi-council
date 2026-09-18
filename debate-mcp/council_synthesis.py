@@ -16,7 +16,14 @@ MAX_CYCLES = 2
 # Presupuesto editorial. El tablero mostró síntesis de 250 palabras en primera
 # persona de una cabeza, con jerga y comentarios sobre el propio registro; la
 # instrucción "hasta 180 palabras" sola no alcanzaba.
-ANSWER_MAX_WORDS = 120
+ANSWER_MAX_WORDS = 150
+ANSWER_MAX_SENTENCES = 7
+# Estilo telegráfico: «Defensa barata: biblioteca madura, 2048 bits, OAEP y
+# PSS con errores uniformes» — fragmentos separados por dos puntos, punto y
+# coma y rayas en vez de oraciones. Más de dos por respuesta ya no se lee.
+TELEGRAPHIC_MAX_MARKS = 2
+_ACRONYM = re.compile(r"\b[A-Z][A-Z0-9#.-]{2,}\b")
+_HEDGE_META = re.compile(r"\b(según las fuentes|las fuentes (?:no )?(?:sostienen|registran|indican)|anclas? p[úu]blicas?|proyecciones? de papers?|no son cifras medidas)\b", re.IGNORECASE)
 LIST_MAX_ITEMS = 3
 CONDITIONS_MAX_ITEMS = 5
 STYLE_FIXES = 1  # pasadas de corrección de estilo antes de la revisión de fidelidad
@@ -80,11 +87,12 @@ def parse(text, review=False):
     return candidates[-1]
 
 
-def style_issues(draft, conceptual=False):
+def style_issues(draft, conceptual=False, question=''):
     """Qué reglas editoriales rompe un borrador. Cada una vino de una síntesis
     real: 250 palabras, «desde mi eje… no nos la bancamos» en la respuesta
-    conjunta, «observer-relative», y una "pregunta abierta" sobre si la
-    decisión #24 estaba duplicada en el registro."""
+    conjunta, «observer-relative», una "pregunta abierta" sobre si la
+    decisión #24 estaba duplicada en el registro, y una respuesta sobre RSA
+    en fragmentos telegráficos con OAEP, PSS y PKCS#1 sin explicar."""
     issues = []
     answer = draft.get('answer') or ''
     words = len(answer.split())
@@ -94,6 +102,18 @@ def style_issues(draft, conceptual=False):
         issues.append('La respuesta habla en primera persona de una cabeza («mi eje», «yo»); la síntesis habla por el consejo, en tercera persona.')
     if _JARGON.search(answer):
         issues.append('Hay jerga o anglicismos; escribí en español claro, sin términos técnicos salvo cita textual.')
+    if answer.count(':') + answer.count(';') + answer.count('—') > TELEGRAPHIC_MAX_MARKS:
+        issues.append('La respuesta está en estilo telegráfico (fragmentos con dos puntos, punto y coma o rayas); '
+                      'escribila en oraciones completas y encadenadas, como se la explicarías a alguien en voz alta.')
+    known = set(_ACRONYM.findall(question or ''))
+    unexplained = [a for a in dict.fromkeys(_ACRONYM.findall(answer))
+                   if a not in known and not re.search(re.escape(a) + r"\s*\(", answer)]
+    if unexplained:
+        issues.append('Siglas o nombres técnicos sin explicar (' + ', '.join(unexplained[:5]) +
+                      '): explicá cada uno entre paréntesis la primera vez, en seis palabras o menos, o evitalo.')
+    if _HEDGE_META.search(answer):
+        issues.append('Las salvedades sobre lo que no está demostrado van en UNA oración al final, en lenguaje natural; '
+                      'no hables de «las fuentes», «anclas» ni «papers».')
     texts = [answer] + [x for k in ('agreements', 'differences', 'open_questions') for x in draft.get(k) or []]
     if any(_META.search(t) for t in texts):
         issues.append('No comentes el registro, el journal, números de decisión ni el proceso del consejo: sólo la pregunta y las posturas.')
@@ -138,17 +158,22 @@ def compose(bundle, seats, invoke, progress=lambda result: None):
             'Respondé en el idioma de la pregunta. No muestres comandos, logs ni planes de investigación. '
             'No inventes hechos ni acuerdo; coincidencia de votos no demuestra verdad. '
             'Distingue lo que sostienen las fuentes de lo que no está demostrado.\n'
-            'REGLAS DE ESTILO (obligatorias): escribí en la voz del consejo, en tercera persona — nunca '
-            '«yo», «mi eje», «mi sesgo» ni el tono de una cabeza en particular. Español claro y directo, sin '
-            'anglicismos ni jerga; si un término técnico es imprescindible, explicalo en cinco palabras. '
-            'La primera oración responde la pregunta. No comentes el journal, el registro, números de decisión, '
-            'duplicados ni el proceso del consejo: sólo la pregunta y las posturas.\nFUENTES:\n' + context)
+            'REGLAS DE ESTILO (obligatorias): escribís para el operador que hizo la pregunta y no es '
+            'especialista en el tema. Voz del consejo, en tercera persona — nunca «yo», «mi eje», «mi sesgo» '
+            'ni el tono de una cabeza en particular. Oraciones completas y encadenadas, como una explicación '
+            'en voz alta; nada de listas telegráficas ni fragmentos separados por dos puntos o punto y coma. '
+            'Español claro, sin anglicismos; cada sigla o término técnico se explica entre paréntesis la '
+            'primera vez, en seis palabras o menos, o se evita. La primera oración responde la pregunta tal '
+            'como se hizo y en su orden. Las salvedades sobre lo que no está demostrado van en UNA oración '
+            'al final, en lenguaje natural, sin hablar de «las fuentes» ni de «papers». No comentes el '
+            'journal, el registro, números de decisión, duplicados ni el proceso del consejo: sólo la '
+            'pregunta y las posturas.\nFUENTES:\n' + context)
     feedback = []
     draft = None
     cycles = 1 if bundle.get('content_check') else MAX_CYCLES
     for cycle in range(1, cycles + 1):
-        prompt = base + (f'\nRedactá una respuesta directa de hasta {ANSWER_MAX_WORDS} palabras y cinco oraciones '
-                         'que integre las perspectivas. ')
+        prompt = base + (f'\nRedactá una respuesta directa de hasta {ANSWER_MAX_WORDS} palabras y '
+                         f'{ANSWER_MAX_SENTENCES} oraciones que integre las perspectivas. ')
         if conceptual:
             prompt += ('La pregunta no tiene repositorio ni ejecución: blocking_conditions y deferred_items van '
                        'VACÍOS; los matices o reservas de las cabezas se integran como frases de la respuesta. ')
@@ -184,7 +209,7 @@ def compose(bundle, seats, invoke, progress=lambda result: None):
         # Estilo antes que fidelidad: una corrección de forma no gasta el ciclo
         # de revisión y los revisores no leen un borrador que igual se reescribiría.
         for _ in range(STYLE_FIXES):
-            issues = style_issues(draft, conceptual)
+            issues = style_issues(draft, conceptual, bundle.get('question', ''))
             if not issues:
                 break
             fix_prompt = (prompt + '\nEl borrador siguiente rompe estas reglas de estilo; reescribilo cumpliéndolas '
@@ -196,7 +221,7 @@ def compose(bundle, seats, invoke, progress=lambda result: None):
                 log.warning('Synthesis style fix failed (%s); keeping the draft', type(exc).__name__)
                 break
             draft = dict(fixed, blocking_conditions=[], deferred_items=[]) if conceptual else fixed
-        draft['style_issues'] = style_issues(draft, conceptual)
+        draft['style_issues'] = style_issues(draft, conceptual, bundle.get('question', ''))
         progress(dict(draft, status='generating', phase='reviewing', cycle=cycle,
                       current_head='all heads', reviews=[]))
 
