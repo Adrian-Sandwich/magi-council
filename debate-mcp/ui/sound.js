@@ -143,10 +143,13 @@ const MagiSound = (() => {
   let thinkingTimer = null;
   function thinkingBurst() {
     if (!enabled || !context || context.state !== 'running' || document.hidden || !volume) return;
-    noise({dur: .03, level: .07, filterType: 'bandpass', frequency: 1900, q: 2.5});
-    tone({f: 1240, dur: .028, type: 'square', level: .22, attack: .002});
-    tone({f: 1660, at: .07, dur: .022, type: 'square', level: .16, attack: .002});
-    if (Math.random() < .35) tone({f: 990, at: .15, dur: .02, type: 'square', level: .12, attack: .002});
+    // Niveles comparables a un voto (impact ≈ .7): la primera versión, a .22
+    // y 28 ms, no se oía en parlantes de laptop.
+    noise({dur: .05, level: .25, filterType: 'bandpass', frequency: 1900, q: 2.5});
+    tone({f: 1240, dur: .05, type: 'square', level: .7, attack: .002});
+    tone({f: 1660, at: .09, dur: .04, type: 'square', level: .5, attack: .002});
+    if (Math.random() < .5) tone({f: 990, at: .18, dur: .035, type: 'square', level: .4, attack: .002});
+    relay(.26, .35);
   }
   function thinking(active) {
     if (active && thinkingTimer === null) {
