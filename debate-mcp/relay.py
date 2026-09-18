@@ -596,6 +596,17 @@ def _journal_inline(conn, thread: str) -> list[dict]:
     return list(reversed(kept))
 
 
+
+def _is_timeout(exc: BaseException) -> bool:
+    """Un timeout del modelo, venga de donde venga: proceso CLI colgado
+    (TimeoutExpired), socket vencido (TimeoutError) o urllib envolviéndolo en
+    URLError — ese último caso se registraba como error genérico y dejaba
+    turnos de 900s exactos con timed_out=false en las métricas."""
+    if isinstance(exc, (TimeoutError, subprocess.TimeoutExpired)):
+        return True
+    reason = getattr(exc, "reason", None)
+    return isinstance(reason, TimeoutError)
+
 def _run_decision_turn(seat_info: dict, d: dict, producir_voto, turn: str) -> None:
     """Un turno de decisión, síncrono: journal inline → voto (lo produce
     `producir_voto(journal)`) → registro con la misma lógica que
@@ -628,9 +639,9 @@ def _run_decision_turn(seat_info: dict, d: dict, producir_voto, turn: str) -> No
               duration_s=round(time.monotonic() - start, 1), **meta)
     except Exception as exc:
         log.error("turno %s de %s en %s falló: %s", turn, seat_info["seat"], d["thread"], exc)
-        reason = 'Tiempo agotado esperando la respuesta.' if isinstance(exc, (TimeoutError, subprocess.TimeoutExpired)) else str(exc)
+        reason = 'Tiempo agotado esperando la respuesta.' if _is_timeout(exc) else str(exc)
         _report_turn_error(meta, reason)
-        event("trigger_done", rc=1, error=reason, timed_out=isinstance(exc, (TimeoutError, subprocess.TimeoutExpired)),
+        event("trigger_done", rc=1, error=reason, timed_out=_is_timeout(exc),
               duration_s=round(time.monotonic() - start, 1), **meta)
 
 
@@ -701,29 +712,29 @@ def _run_chat_turn(seat_info: dict, thread: str, producir_texto, turn: str) -> N
               duration_s=round(time.monotonic() - start, 1), **meta)
 
 
-def _run_api_chat_turn(seat_info: dict, thread: str) -> None:
+def _run_api_chat_turn(seat_info: dict, thread: str, cwd: str | None = None) -> None:
     """Turno de chat libre de un asiento API (HTTP contra el endpoint)."""
     _run_chat_turn(seat_info, thread,
-                   lambda journal: apihead.run_chat_turn(seat_info, journal),
+                   lambda journal: apihead.run_chat_turn(seat_info, journal, cwd, thread),
                    "free-api")
 
 
-def _run_api_chat_turn_bg(seat_info: dict, thread: str) -> None:
+def _run_api_chat_turn_bg(seat_info: dict, thread: str, cwd: str | None = None) -> None:
     try:
-        _run_api_chat_turn(seat_info, thread)
+        _run_api_chat_turn(seat_info, thread, cwd)
     finally:
         with _inflight_lock:
             _inflight.discard(_token(thread))
 
 
-def fire_api_chat_turn(seat_info: dict, thread: str) -> bool:
+def fire_api_chat_turn(seat_info: dict, thread: str, cwd: str | None = None) -> bool:
     """Dispara el turno de chat de un asiento API, en un thread propio."""
     with _inflight_lock:
         _inflight.add(_token(thread))
     log.info("turno API de chat %s (modelo %s) en thread %s",
              seat_info["seat"], seat_info.get("model"), thread)
     event("trigger_spawned", pid=None, thread=thread, author=seat_info["seat"], turn="free-api")
-    threading.Thread(target=_run_api_chat_turn_bg, args=(seat_info, thread), daemon=True).start()
+    threading.Thread(target=_run_api_chat_turn_bg, args=(seat_info, thread, cwd), daemon=True).start()
     return True
 
 
@@ -845,7 +856,7 @@ def _run_cli_inline_chat_turn(seat_info: dict, thread: str, cwd: str) -> None:
     stdout completo posteado como UN mensaje 'respuesta' (igual contrato
     que el turno API de chat)."""
     def producir_texto(journal):
-        system, user = apihead.build_chat_prompt(seat_info["seat"], journal)
+        system, user = apihead.build_chat_prompt(seat_info["seat"], journal, cwd, thread)
         prompt = f"{system}\n\n{user}"
         text = _run_cli_inline(
             seat_info, prompt, cwd,
@@ -969,7 +980,9 @@ def fire_decision_turns(conn, state: dict, d: dict) -> None:
     recent = _journal_inline(conn, d['thread'])
     followup = next((m.get('body') or '' for m in reversed(recent)
                      if m.get('author') == 'adrian'), '')
-    memoria = memory_ctx.memoria_para(followup + ' ' + d['title'], d.get('artifact'), thread=d['thread'])
+    # El título va primero: los términos de búsqueda se acotan y un follow-up
+    # largo dejaba el tema de la decisión fuera de la consulta léxica.
+    memoria = memory_ctx.memoria_para(d['title'] + ' ' + followup, d.get('artifact'), thread=d['thread'])
 
     for turn in turns:
         if turn['seat'] in turn_errors.active(d):
@@ -1160,7 +1173,7 @@ def process_cycle(conn, state: dict) -> None:
             # el round-robin también sirve para cabezas API (Ollama y
             # compatibles): sin esto, el chat se colgaba cada vez que tocaba
             # un asiento sin binario — exigía un CLI que no existe.
-            if fire_api_chat_turn(seat_info, thread):
+            if fire_api_chat_turn(seat_info, thread, resolve_cwd(conn, thread, ts)):
                 ts["triggers"] += 1
             else:
                 state["pending"].append(cand)
@@ -1173,7 +1186,7 @@ def process_cycle(conn, state: dict) -> None:
         question = next((m.get('body') or '' for m in reversed(recent)
                          if m.get('author') == 'adrian'), '')
         if question:
-            prompt += '\n\n' + memory_ctx.memoria_para(question)
+            prompt += '\n\n' + memory_ctx.memoria_para(question, cwd, thread=thread)
         if trigger(other, thread, cand["id"] - 1, cwd, prompt, meta={"turn": "free"}):
             state["spawn_failures"].pop(_token(thread), None)
             ts["triggers"] += 1
@@ -1207,6 +1220,15 @@ def process_cycle(conn, state: dict) -> None:
     save_state(state)
 
 
+def _synthesis_cwd(seat_name: str) -> Path:
+    """Directorio de trabajo estable para la síntesis de un asiento. La
+    síntesis corre bajo candado de Postgres, así que un directorio por asiento
+    no se pisa; los archivos de salida se sobreescriben en cada corrida."""
+    cwd = LOG_DIR / "synthesis" / seat_name
+    cwd.mkdir(parents=True, exist_ok=True)
+    return cwd
+
+
 def _synthesis_invoke(seat, prompt):
     prompt = apihead._persona(seat['seat']) + '\n\n' + prompt
     token = 'synthesis:' + seat['seat']
@@ -1220,36 +1242,39 @@ def _synthesis_invoke(seat, prompt):
     try:
         if seat.get('type') == 'api':
             return apihead.chat(seat['base_url'], seat['model'], apihead._persona(seat['seat']), prompt, 120)
-        with tempfile.TemporaryDirectory(prefix='magi-editor-') as cwd:
-            if seat.get('journal') == 'inline':
-                config = dict(seat, args=list(seat.get('args', [])))
-                if 'exec' in config['args']:
-                    final = Path(cwd) / 'final.txt'
-                    config['args'] += ['--skip-git-repo-check']
-                    if '--sandbox' not in config['args']:
-                        config['args'] += ['--sandbox', 'read-only']
-                    config['args'] += ['--output-last-message', str(final)]
-                    _run_cli_inline(config, prompt, cwd, 120, token=token)
-                    return final.read_text(encoding='utf-8')
-                return _run_cli_inline(config, prompt, cwd, 120, token=token)
-            out = Path(cwd) / 'result.txt'
-            with out.open('wb') as stream:
-                proc = subprocess.Popen([seat['bin'], *seat.get('args', []), prompt], cwd=cwd,
-                    stdout=stream, stderr=subprocess.STDOUT,
-                    **({'start_new_session': True} if os.name == 'posix' else {'creationflags': subprocess.CREATE_NO_WINDOW}))
-                with _procs_lock:
-                    _procs[token] = proc
-                try:
-                    if proc.wait(timeout=120) != 0:
-                        raise RuntimeError('Synthesis provider failed')
-                except subprocess.TimeoutExpired:
-                    _kill_tree(proc)
-                    proc.wait()
-                    raise
-            return out.read_text(encoding='utf-8', errors='replace')
+        # cwd fijo por asiento, no un tempdir por invocación: Claude Code
+        # registra cada cwd nuevo como proyecto en ~/.claude/projects aunque
+        # corra sin persistencia, y cada síntesis dejaba un directorio más.
+        cwd = str(_synthesis_cwd(seat['seat']))
+        if seat.get('journal') == 'inline':
+            config = dict(seat, args=list(seat.get('args', [])))
+            if 'exec' in config['args']:
+                final = Path(cwd) / 'final.txt'
+                config['args'] += ['--skip-git-repo-check']
+                if '--sandbox' not in config['args']:
+                    config['args'] += ['--sandbox', 'read-only']
+                config['args'] += ['--output-last-message', str(final)]
+                _run_cli_inline(config, prompt, cwd, 120, token=token)
+                return final.read_text(encoding='utf-8')
+            return _run_cli_inline(config, prompt, cwd, 120, token=token)
+        out = Path(cwd) / 'result.txt'
+        with out.open('wb') as stream:
+            proc = subprocess.Popen([seat['bin'], *seat.get('args', []), prompt], cwd=cwd,
+                stdout=stream, stderr=subprocess.STDOUT,
+                **({'start_new_session': True} if os.name == 'posix' else {'creationflags': subprocess.CREATE_NO_WINDOW}))
+            with _procs_lock:
+                _procs[token] = proc
+            try:
+                if proc.wait(timeout=120) != 0:
+                    raise RuntimeError('Synthesis provider failed')
+            except subprocess.TimeoutExpired:
+                _kill_tree(proc)
+                proc.wait()
+                raise
+        return out.read_text(encoding='utf-8', errors='replace')
     except Exception as exc:
         error = str(exc)
-        timed_out = isinstance(exc, (TimeoutError, subprocess.TimeoutExpired))
+        timed_out = _is_timeout(exc)
         raise
     finally:
         event('trigger_done', rc=1 if error else 0, error=error,

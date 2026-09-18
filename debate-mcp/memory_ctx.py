@@ -28,7 +28,7 @@ def _normal(text):
                    if not unicodedata.combining(c))
 
 
-def _terminos(text, limit=12):
+def _terminos(text, limit=24):
     return list(dict.fromkeys(t for t in re.findall(r'\w+', _normal(text))
                              if len(t) >= 4 and t not in STOPWORDS))[:limit]
 

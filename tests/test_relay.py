@@ -609,7 +609,7 @@ def test_asiento_api_en_thread_libre_dispara_turno_api(fired, monkeypatch):
     ])
     api_calls = []
     monkeypatch.setattr(relay, "fire_api_chat_turn",
-                        lambda seat, thread: api_calls.append((seat["seat"], thread)) or True)
+                        lambda seat, thread, cwd=None: api_calls.append((seat["seat"], thread)) or True)
     relay.process_cycle(FakeConn([msg(1, author="adrian", kind="analisis")]), fresh_state())
     assert api_calls == [("melchior", "t")]
     assert fired == [], "el asiento API no pasa por el spawn CLI"
@@ -633,7 +633,7 @@ def test_turno_api_de_chat_publica_un_mensaje_respuesta(fired, monkeypatch):
 
     monkeypatch.setattr(relay, "connect", lambda: _ChatConn([]))
     monkeypatch.setattr(relay.apihead, "run_chat_turn",
-                        lambda seat, journal: "sí, yo lo revisaría con calma")
+                        lambda seat, journal, artifact=None, thread=None: "sí, yo lo revisaría con calma")
 
     relay._run_api_chat_turn(
         {"seat": "melchior", "model": "qwen", "base_url": "http://x/v1"}, "chat",
@@ -1073,3 +1073,82 @@ def test_turno_api_suelta_la_conexion_mientras_chatea(monkeypatch, tmp_path):
 
     assert _TrackedConn.abiertas_durante_chat == 0, "chat sin conexión tomada"
     assert _TrackedConn.abiertas == 0
+
+
+# ------------------------------------------------- memoria acotada y síntesis
+
+def test_chat_libre_acota_la_memoria_al_repo_y_al_thread(fired, monkeypatch):
+    """El chat recibía memoria de cualquier proyecto: `memoria_para` se
+    llamaba sólo con la pregunta. Ahora viaja con el cwd resuelto del thread
+    y el thread mismo, igual que en una decisión."""
+    import memory_ctx
+
+    class _JournalConn(FakeConn):
+        def execute(self, query, params=()):
+            q = " ".join(query.split())
+            if q.startswith("SELECT author, kind, body"):
+                return _Result([{"author": "adrian", "kind": "analisis", "body": "¿Qué pasa con auth?"}])
+            return super().execute(query, params)
+
+    seen = []
+    monkeypatch.setattr(memory_ctx, "memoria_para",
+                        lambda q, artifact=None, thread=None: seen.append((q, artifact, thread)) or "MEM")
+    monkeypatch.setattr(relay, "resolve_cwd", lambda conn, thread, ts: "/repo/x")
+    relay.process_cycle(_JournalConn([msg(1, author="adrian", kind="analisis")]), fresh_state())
+    assert seen == [("¿Qué pasa con auth?", "/repo/x", "t")]
+    assert fired and "MEM" in fired[0]["prompt"]
+
+
+def test_turno_api_de_chat_recibe_el_cwd_del_thread(fired, monkeypatch):
+    monkeypatch.setattr(heads, "load", lambda: [
+        {"seat": "melchior", "name": "qwen", "type": "api",
+         "model": "qwen", "base_url": "http://localhost:11434/v1"},
+        {"seat": "balthasar", "name": "kimi", "type": "cli", "bin": "/fake/bin", "args": []},
+    ])
+    api_calls = []
+    monkeypatch.setattr(relay, "resolve_cwd", lambda conn, thread, ts: "/repo/y")
+    monkeypatch.setattr(relay, "fire_api_chat_turn",
+                        lambda seat, thread, cwd=None: api_calls.append((seat["seat"], thread, cwd)) or True)
+    relay.process_cycle(FakeConn([msg(1, author="adrian", kind="analisis")]), fresh_state())
+    assert api_calls == [("melchior", "t", "/repo/y")]
+
+
+def test_la_consulta_a_memoria_empieza_por_el_titulo(fired_magi, monkeypatch):
+    """Los términos de búsqueda se acotan: si el follow-up humano es largo y
+    va primero, el tema de la decisión queda fuera de la consulta léxica."""
+    import memory_ctx
+    seen = []
+    monkeypatch.setattr(memory_ctx, "memoria_para",
+                        lambda q, a=None, thread=None: seen.append((q, a, thread)) or "")
+    relay.process_cycle(FakeConn([], decisions=[mk_decision_row(artifact="/repo/z")]), fresh_state())
+    assert seen and seen[0][0].startswith("¿Hubo un ataque?")
+    assert seen[0][1:] == ("/repo/z", "d-42")
+
+
+def test_la_sintesis_usa_un_cwd_estable_por_asiento(monkeypatch, tmp_path):
+    """Un tempdir nuevo por síntesis dejaba un proyecto fantasma en
+    ~/.claude/projects en cada corrida (57 en una semana). El cwd es uno por
+    asiento, bajo logs/, y se reutiliza."""
+    _isolate(monkeypatch, tmp_path)
+    cwds = []
+
+    def fake_run(config, prompt, cwd, timeout, token=None):
+        cwds.append(cwd)
+        return "ok"
+
+    monkeypatch.setattr(relay, "_run_cli_inline", fake_run)
+    monkeypatch.setattr(relay, "event", lambda *a, **kw: None)
+    seat = {"seat": "casper", "type": "cli", "journal": "inline", "bin": "claude", "args": ["-p"]}
+    assert relay._synthesis_invoke(seat, "compose") == "ok"
+    assert relay._synthesis_invoke(seat, "compose") == "ok"
+    assert cwds[0] == cwds[1] == str(tmp_path / "synthesis" / "casper")
+    assert Path(cwds[0]).is_dir()
+
+
+def test_is_timeout_reconoce_el_timeout_envuelto_por_urllib():
+    import urllib.error
+    assert relay._is_timeout(TimeoutError())
+    assert relay._is_timeout(relay.subprocess.TimeoutExpired("x", 1))
+    assert relay._is_timeout(urllib.error.URLError(TimeoutError("timed out")))
+    assert not relay._is_timeout(urllib.error.URLError(ConnectionRefusedError()))
+    assert not relay._is_timeout(RuntimeError("otra cosa"))

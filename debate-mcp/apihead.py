@@ -181,17 +181,21 @@ def run_turn(seat: dict, decision: dict, journal: list[dict],
     return parse_vote(text)
 
 
-def build_chat_prompt(seat: str, journal: list[dict]) -> tuple[str, str]:
+def build_chat_prompt(seat: str, journal: list[dict], artifact: str | None = None,
+                      thread: str | None = None) -> tuple[str, str]:
     """(system, user) para un turno de CHAT LIBRE (thread sin decisión).
 
     Mismo contrato que una cabeza CLI en un thread libre: un mensaje de
     conversación desde su eje. Sin tag POSITION acá — no hay nada que votar.
+    `artifact`/`thread` acotan la memoria del grafo al repo y la conversación
+    en curso, igual que en una decisión: sin ellos el chat recibía recuerdos
+    de cualquier proyecto.
     """
     persona = _persona(seat)
     import memory_ctx
     question = next((m.get('body') or '' for m in reversed(journal)
                      if m.get('author') == 'adrian'), '')
-    memory = memory_ctx.memoria_para(question) if question else ''
+    memory = memory_ctx.memoria_para(question, artifact, thread=thread) if question else ''
     history = _history(journal, "(conversación vacía)")
     system = (
         f"{persona}\n\n"
@@ -205,9 +209,10 @@ def build_chat_prompt(seat: str, journal: list[dict]) -> tuple[str, str]:
     return system, user
 
 
-def run_chat_turn(seat: dict, journal: list[dict]) -> str:
+def run_chat_turn(seat: dict, journal: list[dict], artifact: str | None = None,
+                  thread: str | None = None) -> str:
     """Un turno de chat: prompt → chat → texto de la respuesta."""
-    system, user = build_chat_prompt(seat["seat"], journal)
+    system, user = build_chat_prompt(seat["seat"], journal, artifact, thread)
     return chat(
         seat["base_url"], seat["model"], system, user,
         seat.get("timeout_secs", DEFAULT_TIMEOUT_SECS),

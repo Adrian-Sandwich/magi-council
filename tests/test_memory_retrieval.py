@@ -48,11 +48,13 @@ def test_same_thread_survives_topic_change_and_follows_graph_edge(graph_db, monk
 
 def test_chat_uses_latest_human_question(monkeypatch):
     calls = []
-    monkeypatch.setattr(memory_ctx, 'memoria_para', lambda query: calls.append(query) or 'MEMORY-SOURCE')
+    monkeypatch.setattr(memory_ctx, 'memoria_para',
+                        lambda query, artifact=None, thread=None: calls.append((query, artifact, thread)) or 'MEMORY-SOURCE')
     _, prompt = apihead.build_chat_prompt('casper', [
         {'author': 'adrian', 'kind': 'analisis', 'body': 'Fix authentication'},
-        {'author': 'casper', 'kind': 'respuesta', 'body': 'Different wording'}])
-    assert calls == ['Fix authentication']
+        {'author': 'casper', 'kind': 'respuesta', 'body': 'Different wording'}],
+        artifact='/repo/a', thread='chat-1')
+    assert calls == [('Fix authentication', '/repo/a', 'chat-1')]
     assert 'MEMORY-SOURCE' in prompt
 
 
