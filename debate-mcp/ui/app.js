@@ -703,6 +703,10 @@ function render() {
   renderMagi(d);
   renderStatusBar(d);
   renderSummary(d);
+  // Sonido de actividad mientras hay alguien trabajando de verdad.
+  MagiSound.thinking(Boolean(d && connected && (thinkingSeats(d).length
+    || (d.status === "executing" && d.execution_activity)
+    || d.seats?.some(s => s.activity) || d.synthesis?.status === "generating")));
   renderMemoryFeedback(d);
   renderOutcome(d);
   renderConversation(d);

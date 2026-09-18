@@ -16,8 +16,13 @@ MAX_CYCLES = 2
 # Presupuesto editorial. El tablero mostró síntesis de 250 palabras en primera
 # persona de una cabeza, con jerga y comentarios sobre el propio registro; la
 # instrucción "hasta 180 palabras" sola no alcanzaba.
-ANSWER_MAX_WORDS = 150
-ANSWER_MAX_SENTENCES = 7
+ANSWER_MAX_WORDS = 250
+ANSWER_MAX_SENTENCES = 14
+# Prosa entrecortada: «Calcular el inverso no es un ataque. Con los factores
+# sale al instante.» — muchas oraciones de seis palabras pegadas sin nexo.
+CHOPPY_MIN_SENTENCES = 5
+CHOPPY_SHORT_WORDS = 8
+CHOPPY_MAX_SHARE = 0.4
 # Estilo telegráfico: «Defensa barata: biblioteca madura, 2048 bits, OAEP y
 # PSS con errores uniformes» — fragmentos separados por dos puntos, punto y
 # coma y rayas en vez de oraciones. Más de dos por respuesta ya no se lee.
@@ -113,6 +118,12 @@ def style_issues(draft, conceptual=False, question=''):
     if unexplained:
         issues.append('Siglas o nombres técnicos sin explicar (' + ', '.join(unexplained[:5]) +
                       '): explicá cada uno entre paréntesis la primera vez, en seis palabras o menos, o evitalo.')
+    sentences = [s for s in re.split(r"(?<=[.!?])\s+", answer.strip()) if s]
+    if len(sentences) >= CHOPPY_MIN_SENTENCES:
+        short = sum(1 for s in sentences if len(s.split()) < CHOPPY_SHORT_WORDS)
+        if short / len(sentences) > CHOPPY_MAX_SHARE:
+            issues.append('La respuesta está entrecortada: demasiadas oraciones de menos de ocho palabras seguidas. '
+                          'Uní las ideas relacionadas en oraciones encadenadas con nexos (porque, por eso, en cambio, además).')
     if _HEDGE_META.search(answer):
         issues.append('Las salvedades sobre lo que no está demostrado van en UNA oración al final, en lenguaje natural; '
                       'no hables de «las fuentes», «anclas» ni «papers».')
@@ -168,7 +179,10 @@ def polish(draft, writer, invoke, question='', conceptual=False, issues=()):
         'Explicá entre paréntesis, en seis palabras o menos, sólo las SIGLAS y nombres de técnicas '
         'la primera vez (OAEP, CRT, PKCS…), nunca palabras corrientes como bits, biblioteca, '
         'clave o cuántico, y ninguna que ya aparezca en la pregunta. Sin anglicismos, sin «las '
-        'fuentes», sin primera persona. Las listas (agreements, differences, open_questions) son '
+        'fuentes», sin primera persona. Si la pregunta tiene varias partes, un párrafo por parte en el '
+        'orden en que se preguntó, separados por una línea en blanco, cada uno empezando por la respuesta '
+        'directa a esa parte; las oraciones se encadenan con nexos (porque, por eso, en cambio, además) en '
+        'vez de quedar sueltas. Las listas (agreements, differences, open_questions) son '
         'una sola frase clara de hasta 30 palabras cada una. No uses herramientas.\n'
         + ('Además, la versión anterior rompía estas reglas; corregilas: ' + json.dumps(list(issues), ensure_ascii=False) + '\n'
            if issues else '') +
@@ -220,8 +234,11 @@ def compose(bundle, seats, invoke, progress=lambda result: None):
             'ni el tono de una cabeza en particular. Oraciones completas y encadenadas, como una explicación '
             'en voz alta; nada de listas telegráficas ni fragmentos separados por dos puntos o punto y coma. '
             'Español claro, sin anglicismos; cada sigla o término técnico se explica entre paréntesis la '
-            'primera vez, en seis palabras o menos, o se evita. La primera oración responde la pregunta tal '
-            'como se hizo y en su orden. Las salvedades sobre lo que no está demostrado van en UNA oración '
+            'primera vez, en seis palabras o menos, o se evita. ESTRUCTURA: si la pregunta tiene varias '
+            'partes, un párrafo por parte y en el orden en que se preguntó (separá párrafos con una línea en '
+            'blanco); cada párrafo empieza con la respuesta directa a esa parte y después la explica. Las '
+            'oraciones se encadenan con nexos (porque, por eso, en cambio, además): nada de oraciones sueltas '
+            'de seis palabras una detrás de otra. Las salvedades sobre lo que no está demostrado van en UNA oración '
             'al final, en lenguaje natural, sin hablar de «las fuentes» ni de «papers». No comentes el '
             'journal, el registro, números de decisión, duplicados ni el proceso del consejo: sólo la '
             'pregunta y las posturas.\nFUENTES:\n' + context)

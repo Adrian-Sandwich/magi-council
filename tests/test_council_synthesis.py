@@ -149,7 +149,7 @@ def test_style_issues_detecta_lo_que_salio_mal_en_la_sintesis_real():
     «observer-relative» y una pregunta abierta sobre si la decisión #24
     estaba duplicada en el registro. Ninguna regla es teórica."""
     bad = {'answer': ('Lo divino es una construcción observer-relative. Desde mi eje, la respuesta '
-                      'conveniente sería sí, y la rechazo porque no nos la bancamos. ' + 'palabra ' * 160),
+                      'conveniente sería sí, y la rechazo porque no nos la bancamos. ' + 'palabra ' * 260),
            'agreements': ['a'], 'differences': [], 'open_questions': ['Las fuentes registran la DECISIÓN #24 cerrada dos veces'],
            'blocking_conditions': ['distinguir construcción de ilusión'], 'deferred_items': []}
     issues = synthesis.style_issues(bad, conceptual=True)
@@ -282,7 +282,7 @@ def test_el_corrector_hace_una_segunda_pasada_si_alargo_o_rompio_reglas():
     «bits» y «biblioteca»; una segunda pasada con las reglas rotas la trae de
     vuelta. Si vuelve a fallar, se queda: legible pero larga es mejor que
     telegráfica."""
-    long_answer = 'Explicación ' * 200
+    long_answer = 'Dato ' * 300
     calls = []
 
     def invoke(seat, prompt):
@@ -300,3 +300,17 @@ def test_el_corrector_hace_una_segunda_pasada_si_alargo_o_rompio_reglas():
     assert 'no puede superar las' in calls[1]
     assert synthesis.style_issues({'answer': 'La clave queda copiada en registros del sistema.',
                                    'agreements': [], 'differences': [], 'open_questions': []}, True) == []
+
+
+def test_prosa_entrecortada_se_detecta():
+    choppy = {'answer': ('RSA falla por su entorno. Fallan el azar y la custodia. Calcular el inverso no es un ataque. '
+                         'Con los factores sale al instante. Sin ellos hay que factorizar. Nadie fijó una cifra.'),
+              'agreements': [], 'differences': [], 'open_questions': []}
+    assert any('entrecortada' in i for i in synthesis.style_issues(choppy, True, question='¿Cómo se rompe RSA?'))
+    flowing = {'answer': ('RSA falla por su entorno y no por su matemática, porque los problemas reales aparecen '
+                          'al generar las claves con poco azar o al guardar mal la clave privada. Calcular el '
+                          'inverso de la clave privada no es un ataque en sí, ya que con los factores primos es '
+                          'inmediato y sin ellos equivale a factorizar el módulo. Para claves de 2048 bits nadie '
+                          'ha fijado una cifra de cómputo, así que sólo existen extrapolaciones.'),
+               'agreements': [], 'differences': [], 'open_questions': []}
+    assert synthesis.style_issues(flowing, True, question='¿Cómo se rompe RSA?') == []

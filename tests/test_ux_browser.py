@@ -374,3 +374,21 @@ def test_token_caducado_recarga_la_pagina(page):
     page.evaluate("window.feed.onerror()")
     page.wait_for_function("window.reloads === 1", timeout=8000)
     assert "Session expired" in page.locator("#connection-status").inner_text()
+
+
+def test_sonido_de_actividad_mientras_piensan_y_se_apaga_al_cerrar(page):
+    page.locator("#sound-toggle").click()
+    data = snapshot()                      # abierta, nadie votó: las tres piensan
+    feed(page, data)
+    assert page.evaluate("MagiSound.thinkingActive") is True
+    for seat in data["decisions"][0]["seats"]:
+        seat.update(voted=True, position="info")
+    data["decisions"][0].update(status="closed", ruling="info",
+                                badge={"text": "INFO", "color": "#3caee0", "flicker": False})
+    feed(page, data)
+    assert page.evaluate("MagiSound.thinkingActive") is False
+    data["decisions"][0]["synthesis"] = {"status": "generating", "phase": "polishing", "cycle": 1, "current_head": "casper"}
+    feed(page, data)
+    assert page.evaluate("MagiSound.thinkingActive") is True
+    page.locator("#sound-toggle").click()  # apagar el sonido corta la actividad
+    assert page.evaluate("MagiSound.thinkingActive") is False

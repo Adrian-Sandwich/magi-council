@@ -137,6 +137,25 @@ const MagiSound = (() => {
       noise({at: .22, dur: .06, level: .3, filterType: 'highpass', frequency: 2600});
     },
   };
+  // Actividad de cálculo mientras las cabezas piensan, sintetizan o el
+  // ejecutor trabaja: una ráfaga de datos muy baja cada ~1.5 s (terminal /
+  // datos en la guía NERV), no una alarma. Se apaga sola al cambiar de estado.
+  let thinkingTimer = null;
+  function thinkingBurst() {
+    if (!enabled || !context || context.state !== 'running' || document.hidden || !volume) return;
+    noise({dur: .03, level: .07, filterType: 'bandpass', frequency: 1900, q: 2.5});
+    tone({f: 1240, dur: .028, type: 'square', level: .22, attack: .002});
+    tone({f: 1660, at: .07, dur: .022, type: 'square', level: .16, attack: .002});
+    if (Math.random() < .35) tone({f: 990, at: .15, dur: .02, type: 'square', level: .12, attack: .002});
+  }
+  function thinking(active) {
+    if (active && thinkingTimer === null) {
+      const tick = () => { thinkingBurst(); thinkingTimer = setTimeout(tick, 1300 + Math.random() * 700); };
+      thinkingTimer = setTimeout(tick, 600);
+    } else if (!active && thinkingTimer !== null) {
+      clearTimeout(thinkingTimer); thinkingTimer = null;
+    }
+  }
   function play(kind) {
     if (!enabled || !context || context.state !== 'running' || document.hidden || !volume) return;
     const now = context.currentTime;
@@ -144,7 +163,8 @@ const MagiSound = (() => {
     last = now;
     (cues[kind] || cues.send)();
   }
-  return {unlock, play, get enabled() {return enabled;}, get volume() {return volume;},
-    setEnabled(value) {enabled = value; if (!value) silence(); save();},
+  return {unlock, play, thinking, get thinkingActive() {return thinkingTimer !== null;},
+    get enabled() {return enabled;}, get volume() {return volume;},
+    setEnabled(value) {enabled = value; if (!value) { silence(); thinking(false); } save();},
     setVolume(value) {volume = Math.max(0, Math.min(1, value)); silence(); save();}};
 })();
