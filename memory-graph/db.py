@@ -56,6 +56,12 @@ CREATE TABLE IF NOT EXISTS file_cache (
     facts TEXT NOT NULL,
     PRIMARY KEY (source, path)
 );
+
+CREATE TABLE IF NOT EXISTS ingest_runs (
+    source TEXT PRIMARY KEY,
+    finished_at REAL NOT NULL,
+    summary TEXT
+);
 """
 
 
@@ -130,6 +136,35 @@ def reset_source_edges(conn: sqlite3.Connection, source: str, from_id: str) -> N
     viejos de ese mismo source/from_id — evita doble-conteo de weight al
     re-correr el ingestor sobre la misma sesión/doc."""
     conn.execute("DELETE FROM edges WHERE source = ? AND from_id = ?", (source, from_id))
+
+
+# ------------------------------------------------------------ corridas
+
+def record_run(conn: sqlite3.Connection, source: str, summary: str | None = None,
+               finished_at: float | None = None) -> None:
+    """Deja constancia de que un ingestor terminó. Existe porque el mtime de
+    memory.db dejó de servir para saber si el refresh horario está vivo: el
+    relay sincroniza conversaciones cada 30s y toca el archivo aunque
+    sesiones, docs y código lleven días sin re-ingestarse. healthcheck mira
+    la edad de cada fuente por separado."""
+    import time
+    conn.execute(
+        """
+        INSERT INTO ingest_runs (source, finished_at, summary) VALUES (?, ?, ?)
+        ON CONFLICT(source) DO UPDATE SET
+            finished_at=excluded.finished_at, summary=excluded.summary
+        """,
+        (source, finished_at if finished_at is not None else time.time(), summary),
+    )
+
+
+def last_runs(conn: sqlite3.Connection) -> dict[str, float]:
+    """{source: finished_at (epoch)} de la última corrida de cada ingestor."""
+    try:
+        rows = conn.execute("SELECT source, finished_at FROM ingest_runs").fetchall()
+    except sqlite3.OperationalError:
+        return {}  # base anterior a la tabla: nadie registró corridas todavía
+    return {source: finished_at for source, finished_at in rows}
 
 
 # ------------------------------------------------------------ cache de archivos

@@ -148,6 +148,7 @@ def main() -> None:
     n_swept = db.sweep_domain(conn, "doc", seen)
 
     code_index.close()
+    db.record_run(conn, "ingest_docs")
     conn.commit()
     conn.close()
     print(f"[ingest_docs] {n_docs} docs, {n_edges} edges, {n_swept} borrados")

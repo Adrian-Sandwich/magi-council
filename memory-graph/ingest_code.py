@@ -111,6 +111,7 @@ def main() -> None:
     # Un proyecto reindexado pierde funciones que ya no existen, y uno
     # borrado del cache desaparece entero: sin esto quedaban para siempre.
     n_swept = db.sweep_domain(conn, "code", seen)
+    db.record_run(conn, "ingest_code")
     conn.commit()
     conn.close()
     print(f"[ingest_code] total: {total_nodes} nodos, {total_edges} edges, {n_swept} borrados")

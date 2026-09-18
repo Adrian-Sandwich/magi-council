@@ -163,6 +163,7 @@ def main() -> None:
     db.forget_missing_files(conn, SOURCE, seen_paths)
 
     code_index.close()
+    db.record_run(conn, "ingest_kimi")
     conn.commit()
     conn.close()
     print(f"[ingest_kimi] {n_sessions} sesiones ({n_cached} archivos sin cambios), {n_swept} borradas")

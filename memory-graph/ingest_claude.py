@@ -141,6 +141,7 @@ def main() -> None:
     db.forget_missing_files(conn, SOURCE, seen_paths)
 
     code_index.close()
+    db.record_run(conn, "ingest_claude")
     conn.commit()
     conn.close()
     print(

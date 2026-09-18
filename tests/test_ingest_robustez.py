@@ -4,6 +4,7 @@ encuentra su fuente de datos tiene que degradar con aviso, no tumbar
 resuelve. Nada acá toca Postgres."""
 
 import json
+import os
 
 import ingest_docs
 import ingest_kimi
@@ -76,3 +77,23 @@ def test_file_id_con_caminado_capeado_no_explota(tmp_path, monkeypatch):
     monkeypatch.setattr(ingest_docs, "_RGLOB_MAX_DIRS", 3)
     out = ingest_docs.file_id(_SinIndice(), tmp_path, "no_existe.py")
     assert out == f"file:{tmp_path / 'no_existe.py'}"
+
+
+# ------------------------------------------------------------ export_kgraph
+
+def test_export_sin_visor_no_tumba_el_refresh(tmp_path, allow_real_processes):
+    """Sin Node_visualizer en la máquina, export_kgraph salía con código 1 y
+    refresh.sh (set -e) terminaba en error en cada corrida horaria: la tarea
+    programada quedaba siempre 'fallida' y tapaba fallos reales. El visor es
+    opcional: se avisa y se sale limpio."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parent.parent / "memory-graph" / "export_kgraph.py"
+    env = dict(os.environ, NODE_VISUALIZER_DIR=str(tmp_path / "no-existe"),
+               MEMORY_GRAPH_DB=str(tmp_path / "memory.db"))
+    proc = subprocess.run([sys.executable, str(script)], env=env, cwd=str(script.parent),
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert "omitido" in proc.stderr

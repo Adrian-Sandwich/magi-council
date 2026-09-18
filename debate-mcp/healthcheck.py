@@ -23,6 +23,7 @@ Exit code: 0 todo bien, 1 warning, 2 crítico. Sirve para agendarlo.
 """
 
 import json
+import sqlite3
 import subprocess
 import sys
 import time
@@ -120,31 +121,84 @@ def check_relay() -> tuple[str, str]:
     return OK, detail
 
 
-def check_graph() -> tuple[str, str]:
-    if not MEMORY_DB.exists():
-        return WARN, f"{MEMORY_DB} no existe: nunca se corrió memory-graph/refresh.sh"
+# Lo que refresh.sh (horario) tiene que haber corrido. ingest_debate no está:
+# lo cubre la sincronización continua del relay (memory_sync).
+REFRESH_SOURCES = ("ingest_claude", "ingest_kimi", "ingest_docs", "ingest_code")
+
+
+def _ingest_runs() -> dict[str, float]:
+    """{ingestor: epoch de su última corrida} leído de memory.db. Vacío si la
+    base es anterior a la tabla ingest_runs."""
+    try:
+        with sqlite3.connect(f"{MEMORY_DB.resolve().as_uri()}?mode=ro", uri=True, timeout=2) as conn:
+            return dict(conn.execute("SELECT source, finished_at FROM ingest_runs").fetchall())
+    except sqlite3.Error:
+        return {}
+
+
+def _check_sync() -> tuple[str, str]:
+    """Conversaciones y decisiones: las sincroniza el relay cada 30s."""
     try:
         heartbeat = json.loads(HEARTBEAT_PATH.read_text())
         sync = heartbeat.get('memory_sync', {})
     except (OSError, ValueError):
         sync = {}
-    if sync:
-        if sync.get('status') == 'error':
-            return WARN, f"sincronización de conversaciones fallando ({sync.get('error', 'error')}); se reintentará"
-        last_success = sync.get('last_success')
-        if sync.get('semantic_status') not in (None, 'ok'):
-            return WARN, f"conversaciones sincronizadas; índice semántico pendiente ({sync['semantic_status']})"
-        if last_success and _age_secs(last_success) < 180:
-            return OK, f"conversaciones sincronizadas hace {_human(_age_secs(last_success))}; otras fuentes dependen de refresh.sh"
-        return WARN, 'sincronización de conversaciones pendiente o atrasada'
-    age = _age_secs(MEMORY_DB.stat().st_mtime)
-    size_mb = MEMORY_DB.stat().st_size / 1e6
-    detail = f"actualizado hace {_human(age)} ({size_mb:.0f} MB)"
-    if age > GRAPH_CRIT_SECS:
-        return CRIT, f"grafo stale: {detail} — refresh.sh no está corriendo"
-    if age > GRAPH_WARN_SECS:
-        return WARN, f"grafo envejecido: {detail}"
-    return OK, detail
+    if not sync:
+        return WARN, "sin sincronización de conversaciones (relay sin heartbeat)"
+    if sync.get('status') == 'error':
+        return WARN, f"sincronización de conversaciones fallando ({sync.get('error', 'error')}); se reintentará"
+    if sync.get('semantic_status') not in (None, 'ok'):
+        return WARN, f"conversaciones sincronizadas; índice semántico pendiente ({sync['semantic_status']})"
+    last_success = sync.get('last_success')
+    if last_success and _age_secs(last_success) < 180:
+        return OK, f"conversaciones sincronizadas hace {_human(_age_secs(last_success))}"
+    return WARN, 'sincronización de conversaciones pendiente o atrasada'
+
+
+def _check_refresh(runs: dict[str, float]) -> tuple[str, str]:
+    """Sesiones, docs y código: los re-ingesta refresh.sh cada hora. Se mira
+    la edad de CADA fuente, no el mtime de memory.db: el relay toca el archivo
+    cada 30s y el mtime decía "fresco" con sesiones de días sin ingestar."""
+    stale = []
+    worst = OK
+    for source in REFRESH_SOURCES:
+        finished = runs.get(source)
+        age = _age_secs(finished) if finished else None
+        if age is None:
+            status = WARN
+            stale.append(f"{source} nunca corrió")
+        elif age > GRAPH_CRIT_SECS:
+            status = CRIT
+            stale.append(f"{source} hace {_human(age)}")
+        elif age > GRAPH_WARN_SECS:
+            status = WARN
+            stale.append(f"{source} hace {_human(age)}")
+        else:
+            continue
+        if _RANK[status] > _RANK[worst]:
+            worst = status
+    if not stale:
+        newest = max(runs[s] for s in REFRESH_SOURCES)
+        return OK, f"refresh.sh corrió hace {_human(_age_secs(newest))}"
+    return worst, "refresh.sh atrasado: " + ", ".join(stale)
+
+
+def check_graph() -> tuple[str, str]:
+    if not MEMORY_DB.exists():
+        return WARN, f"{MEMORY_DB} no existe: nunca se corrió memory-graph/refresh.sh"
+    runs = _ingest_runs()
+    if not runs:
+        # Base anterior a ingest_runs: sólo queda el mtime, que desde que el
+        # relay sincroniza cada 30s ya no distingue fuentes.
+        age = _age_secs(MEMORY_DB.stat().st_mtime)
+        size_mb = MEMORY_DB.stat().st_size / 1e6
+        detail = f"actualizado hace {_human(age)} ({size_mb:.0f} MB); sin registro por fuente, corré refresh.sh"
+        if age > GRAPH_CRIT_SECS:
+            return CRIT, f"grafo stale: {detail}"
+        return WARN, f"grafo sin registro de corridas: {detail}"
+    results = [_check_sync(), _check_refresh(runs)]
+    worst = max((s for s, _ in results), key=_RANK.get)
+    return worst, "; ".join(detail for _, detail in results)
 
 
 def check_decisions() -> tuple[str, str]:

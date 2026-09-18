@@ -168,3 +168,12 @@ def test_write_decision_crea_nodo_con_dossier_y_edge_journal_of(graph_db):
     ingest_debate.write_decision(graph_db, row, NOW)
     n = graph_db.execute("SELECT count(*) FROM nodes WHERE domain = 'decision'").fetchone()[0]
     assert n == 1, "dos corridas no duplican el nodo"
+
+
+def test_record_run_guarda_la_ultima_corrida_por_fuente(graph_db):
+    import db
+
+    db.record_run(graph_db, "ingest_claude", finished_at=100.0)
+    db.record_run(graph_db, "ingest_claude", finished_at=200.0, summary="3 sesiones")
+    db.record_run(graph_db, "ingest_docs", finished_at=150.0)
+    assert db.last_runs(graph_db) == {"ingest_claude": 200.0, "ingest_docs": 150.0}

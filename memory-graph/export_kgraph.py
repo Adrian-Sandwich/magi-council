@@ -19,10 +19,15 @@ OUT_PATH = settings.KGRAPH_OUT
 TOOLTIP_MAX = 200
 
 if not (NODE_VISUALIZER / "kgraph_contract.py").exists():
-    raise SystemExit(
-        f"[export_kgraph] no encuentro kgraph_contract.py en {NODE_VISUALIZER}. "
-        f"Apuntá NODE_VISUALIZER_DIR al checkout de Node_visualizer."
+    # El visor es opcional: sin él el grafo sigue sirviendo al consejo. Salir
+    # con error acá hacía fallar refresh.sh (y la tarea programada) en cada
+    # corrida aunque la ingesta hubiera andado bien, y tapaba fallos reales.
+    print(
+        f"[export_kgraph] omitido: no encuentro kgraph_contract.py en {NODE_VISUALIZER}. "
+        f"Apuntá NODE_VISUALIZER_DIR al checkout de Node_visualizer si querés el visor 3D.",
+        file=sys.stderr,
     )
+    raise SystemExit(0)
 
 sys.path.insert(0, str(NODE_VISUALIZER))
 from kgraph_contract import finalize  # noqa: E402
