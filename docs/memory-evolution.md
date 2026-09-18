@@ -197,6 +197,22 @@ $env:CLAMI_TEST_POSTGRES_DSN = 'dbname=debate host=localhost'
 .\debate-mcp\.venv\Scripts\python.exe -m pytest tests/test_content_consensus.py tests/test_council_synthesis.py tests/test_memory_retrieval.py tests/test_outcomes.py -q
 ```
 
+**Etiquetas humanas con el uso** (2026-09-17): cada ronda deja en el dossier qué
+nodos del grafo entraron al prompt (`minority_report.memory_sources`); la tarjeta
+de síntesis muestra esas fuentes con **👍 Sirvió / 👎 No sirvió**. La
+calificación se guarda en `memory_feedback` (migración 006) con la foto de las
+fuentes y un mensaje en el journal, se ingesta al nodo de la decisión y
+`eval_retrieval.py` la resume (fracción útil, fuentes más rechazadas). Es el
+conjunto calificado a mano que faltaba, recogido sin etiquetar aparte; juzga el
+bloque completo, no cada fuente.
+
+Las sesiones de las cabezas no se persisten a propósito (Casper corre con
+`--no-session-persistence`, Kimi y Codex no dejan transcript por turno): lo que
+concluyen ya entra al grafo por el journal (voto, evidencia, síntesis) y el
+rastro de herramientas de cada turno sería ruido y disco sin valor de
+recuperación. Por eso `ingest_claude` sólo ve las sesiones interactivas del
+operador.
+
 Estas evaluaciones prueban comportamiento, no que los modelos razonen mejor en
 general. `debate-mcp/metrics.py` cubre la latencia: p50/p95/máximo, tasa de error
 y timeouts por asiento y tipo de turno a partir de `logs/trigger_events.jsonl`,

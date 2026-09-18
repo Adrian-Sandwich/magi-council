@@ -100,9 +100,15 @@ declarations you write in chat (`Objetivo: …`, `Restricción [datos]: …`,
 `Pendiente [pruebas]: …`) are kept per conversation as sourced, versioned
 facts.
 
-System status at any time: `.venv/bin/python healthcheck.py`. Latency, error
+System status at any time: `.venv/bin/python healthcheck.py` (Postgres, relay,
+stuck decisions, graph freshness per source, and seats whose failure rate over
+the last week exceeds 30 % in their current role). On Windows schedule it
+every 15 minutes with a toast on failure:
+`powershell -ExecutionPolicy Bypass -File debate-mcp\bin\schedule-healthcheck.ps1`
+(`-Remove` unregisters; log in `debate-mcp/logs/healthcheck.log`). Latency, error
 and timeout rates per seat and turn type (from `logs/trigger_events.jsonl`):
-`.venv/bin/python metrics.py --days 30`. Retrieval quality against your own
+`.venv/bin/python metrics.py --days 30`. A CLI head that dies within seconds
+of starting with no output is retried once before its turn is marked ERROR. Retrieval quality against your own
 board's real follow-ups: `memory-graph/eval_retrieval.py` (leave-one-out;
 see `docs/memory-evolution.md`).
 
@@ -189,6 +195,11 @@ The UI shows the answer, shared points, differences and open questions; a
 draft that didn't clear every review is marked **partial** with the
 outstanding objections. The vote percentage is labeled as vote agreement,
 not factual certainty.
+
+The synthesis card also lists which memory-graph sources the council saw in
+the round, with **👍 Sirvió / 👎 No sirvió**: your rating is stored with a
+snapshot of those sources, feeds the graph, and gives `eval_retrieval.py` a
+hand-labeled set. It never changes votes or reopens anything.
 
 **¿Cómo salió?** lets you record how a decision turned out — worked, failed,
 partial or unconfirmed — with an observation, an evidence reference and an
