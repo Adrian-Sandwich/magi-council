@@ -9,7 +9,21 @@ con su identificador y fecha. Son fuentes históricas, no hechos verificados.
 La recuperación prioriza el mismo thread, después el repositorio y la coincidencia
 de términos. Usa fechas del contenido y evita el antiguo relleno de decisiones
 recientes sin relación. Recorre un salto del grafo hacia archivos, código y documentos.
-El contexto enviado tiene un máximo de 6500 caracteres y llega al consejo y al chat.
+El contexto enviado tiene un máximo de 4500 caracteres y 5 dossiers (hasta el
+2026-09-18 eran 6500 y 8, y salía siempre lleno: 6.4–6.5k en 14 decisiones
+seguidas) y llega al consejo y al chat. Un dossier entra sólo si comparte el
+thread, coincide en el título, coincide en suficientes términos del contenido
+(uno si es el mismo repositorio, dos si no) o es semánticamente cercano; del
+mismo thread no se repite evidencia (el journal ya va en el prompt) y de otros
+dossiers van el último mensaje humano, el resultado y una sola posición de
+cabeza, 300 caracteres cada uno, con 1500 por dossier. Con eso el bloque medio
+pasó de 6474 a 4116 caracteres (~1.000 tokens por cabeza y turno) sin cambiar el
+recall de la evaluación con seguimientos reales (`MEMORY_SELECTIVE=0` restaura
+el comportamiento anterior para comparar). En la ronda 1 de una decisión con
+repositorio se antepone un mapa del repo construido desde el grafo de código
+(`memory_ctx.repo_brief`): tamaño, carpetas, entradas HTTP, archivos más
+referenciados y más cambiados, para que las cabezas con herramientas lean lo
+relevante en vez de explorar.
 El chat busca por la última intervención humana y, desde 2026-09-17, acota la
 memoria al repositorio resuelto del thread y al thread mismo, igual que una
 decisión. En las decisiones la consulta léxica arranca por el título: los

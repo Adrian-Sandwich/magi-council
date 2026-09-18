@@ -107,8 +107,20 @@ every 15 minutes with a toast on failure:
 `powershell -ExecutionPolicy Bypass -File debate-mcp\bin\schedule-healthcheck.ps1`
 (`-Remove` unregisters; log in `debate-mcp/logs/healthcheck.log`). Latency, error
 and timeout rates per seat and turn type (from `logs/trigger_events.jsonl`):
-`.venv/bin/python metrics.py --days 30`. A CLI head that dies within seconds
-of starting with no output is retried once before its turn is marked ERROR. Retrieval quality against your own
+`.venv/bin/python metrics.py --days 30` — including approximate tokens per
+turn (prompt, output and memory block, at 4 characters per token; what a
+head reads on its own with tools is not visible). A CLI head that dies
+within seconds of starting with no output is retried once before its turn
+is marked ERROR.
+
+What a head receives per turn: the journal (last 15 messages, 18 000
+characters at most), the memory block (at most 5 dossiers and 4 500
+characters, only sources that share the thread, the title, enough topic
+terms or semantic similarity — a dossier from the same repository with no
+topic in common is not memory, it is padding), and in round 1 of a decision
+with a repository a **repository brief** built from the code graph (size,
+folders, HTTP entry points, most-referenced and most recently changed
+files) so heads with tools read what matters instead of exploring. Retrieval quality against your own
 board's real follow-ups: `memory-graph/eval_retrieval.py` (leave-one-out;
 see `docs/memory-evolution.md`).
 
