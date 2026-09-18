@@ -37,14 +37,14 @@ def test_three_reviews_required_and_disagreement_preserved():
     calls = []
     def invoke(seat, prompt):
         calls.append(seat['seat'])
-        if 'Redactá una respuesta' in prompt:
+        if 'Redactá una respuesta' in prompt or 'corrector de estilo' in prompt:
             return json.dumps(DRAFT)
         return json.dumps({'approve': True, 'feedback': ''})
     result = synthesis.compose(BUNDLE, SEATS, invoke)
     assert result['status'] == 'reviewed'
     assert len(result['reviews']) == 3
     assert result['differences'] == DRAFT['differences']
-    assert len(calls) == 4
+    assert len(calls) == 5  # borrador + corrector de estilo + 3 revisiones
 
 
 def test_writer_priority_and_reviews_run_in_parallel():
@@ -57,7 +57,7 @@ def test_writer_priority_and_reviews_run_in_parallel():
     def invoke(seat, prompt):
         with lock:
             calls.append(seat['seat'])
-        if 'Redactá una respuesta' in prompt:
+        if 'Redactá una respuesta' in prompt or 'corrector de estilo' in prompt:
             return json.dumps(DRAFT)
         barrier.wait(timeout=2)
         return json.dumps({'approve': True, 'accept_answer': True, 'feedback': ''})
@@ -71,19 +71,19 @@ def test_dissent_never_becomes_consensus_and_budget_is_bounded():
     calls = []
     def invoke(seat, prompt):
         calls.append(prompt)
-        if 'Redactá una respuesta' in prompt:
+        if 'Redactá una respuesta' in prompt or 'corrector de estilo' in prompt:
             return json.dumps(DRAFT)
         return json.dumps({'approve': seat['seat'] != 'casper', 'feedback': 'Falta el costo'})
     result = synthesis.compose(BUNDLE, SEATS, invoke)
     assert result['status'] == 'partial'
     assert result['cycle'] == 2
-    assert len(calls) == 8
-    assert 'Falta el costo' in calls[4]
+    assert len(calls) == 10  # (borrador + corrector + 3 revisiones) x 2 ciclos
+    assert 'Falta el costo' in calls[5]
 
 
 def test_missing_reviewer_is_not_approval():
     def invoke(seat, prompt):
-        return json.dumps(DRAFT if 'Redactá una respuesta' in prompt else {'approve': True, 'feedback': ''})
+        return json.dumps(DRAFT if ('Redactá una respuesta' in prompt or 'corrector de estilo' in prompt) else {'approve': True, 'feedback': ''})
     result = synthesis.compose(BUNDLE, SEATS[:2], invoke)
     assert result['status'] == 'partial'
     assert result['reviews'][-1]['approve'] is False
@@ -110,13 +110,13 @@ def test_broken_reviewer_output_is_not_approval():
     calls = []
     def invoke(seat, prompt):
         calls.append(prompt)
-        if 'Redactá una respuesta' in prompt:
+        if 'Redactá una respuesta' in prompt or 'corrector de estilo' in prompt:
             return json.dumps(DRAFT)
         return 'Provider error: invalid model'
     result = synthesis.compose(BUNDLE, SEATS, invoke)
     assert result['status'] == 'partial'
     assert not any(review['approve'] for review in result['reviews'])
-    assert len(calls) == 4
+    assert len(calls) == 5
     assert result['cycle'] == 1
     assert result['stop_reason'] == 'review_unavailable'
 
@@ -126,6 +126,8 @@ def test_draft_is_published_before_slow_review_and_survives_failed_revision():
     drafts = 0
     def invoke(seat,prompt):
         nonlocal drafts
+        if 'corrector de estilo' in prompt:
+            return json.dumps(DRAFT)
         if 'Redactá una respuesta' in prompt:
             drafts += 1
             if drafts == 2:
@@ -165,7 +167,7 @@ def test_borrador_con_problemas_de_estilo_se_corrige_antes_de_la_revision():
 
     def invoke(seat, prompt):
         prompts.append(prompt)
-        if 'rompe estas reglas de estilo' in prompt:
+        if 'rompe estas reglas de estilo' in prompt or 'corrector de estilo' in prompt:
             return json.dumps(DRAFT)              # el escritor corrige
         if 'Redactá una respuesta' in prompt:
             return json.dumps(bad)                # primer borrador, mal escrito
@@ -175,7 +177,7 @@ def test_borrador_con_problemas_de_estilo_se_corrige_antes_de_la_revision():
     assert result['status'] == 'reviewed'
     assert result['answer'] == DRAFT['answer'] and result['style_issues'] == []
     assert sum('rompe estas reglas' in p for p in prompts) == 1
-    assert len(prompts) == 5  # borrador + corrección + 3 revisiones
+    assert len(prompts) == 6  # borrador + corrección de reglas + corrector de estilo + 3 revisiones
 
 
 def test_pregunta_conceptual_no_lleva_condiciones_y_el_prompt_lo_dice():
@@ -183,7 +185,7 @@ def test_pregunta_conceptual_no_lleva_condiciones_y_el_prompt_lo_dice():
 
     def invoke(seat, prompt):
         prompts.append(prompt)
-        if 'Redactá una respuesta' in prompt:
+        if 'Redactá una respuesta' in prompt or 'corrector de estilo' in prompt:
             return json.dumps(dict(DRAFT, blocking_conditions=['x'], deferred_items=['y']))
         return json.dumps({'approve': True, 'feedback': ''})
     result = synthesis.compose(BUNDLE, SEATS, invoke)   # BUNDLE: sin artifact ni production
@@ -225,3 +227,51 @@ def test_estilo_telegrafico_siglas_y_meta_salvedades_se_detectan():
                      'primos, recuperar la clave equivale a factorizar el módulo. Las cifras para 2048 bits son '
                      'extrapolaciones, no mediciones.'), 'agreements': [], 'differences': [], 'open_questions': []}
     assert synthesis.style_issues(ok, conceptual=True, question=question) == []
+
+
+# ------------------------------------------------------------ corrector de estilo
+
+def test_el_corrector_de_estilo_reescribe_sin_cambiar_el_contenido():
+    """El filtro de salida que pidió el operador («no se entiende»): una pasada
+    fija de corrección antes de la revisión. Si el corrector pierde o inventa
+    elementos, se descarta y queda el borrador."""
+    telegram = dict(DRAFT, answer='Riesgo: entorno; no álgebra. Defensa: biblioteca madura, OAEP.',
+                    blocking_conditions=['Agregar OAEP'], next_move=None)
+    clear = dict(telegram, answer='El riesgo está en el entorno y no en la matemática. La defensa es una '
+                 'biblioteca madura con relleno OAEP (formato moderno del mensaje).',
+                 blocking_conditions=[], next_move={'title': 'inventado', 'reason': 'r', 'expected_result': 'e',
+                                                    'scope': 's', 'risk': 'r', 'recommendation': 'discuss'})
+    seen = []
+
+    def invoke(seat, prompt):
+        seen.append(prompt)
+        return json.dumps(clear)
+    out = synthesis.polish(telegram, {'seat': 'casper'}, invoke, question='¿Qué riesgo tiene RSA?', conceptual=False)
+    assert out['polished'] is True and out['answer'] == clear['answer']
+    assert out['blocking_conditions'] == ['Agregar OAEP'], 'las condiciones no las toca el corrector'
+    assert out['next_move'] is None, 'ni inventa un siguiente movimiento'
+    assert '¿Qué riesgo tiene RSA?' in seen[0] and 'no es especialista' in seen[0]
+    # pierde una lista -> se descarta
+    lost = dict(clear, differences=[])
+    out = synthesis.polish(telegram, {'seat': 'casper'}, lambda s, p: json.dumps(lost), question='q')
+    assert out['polished'] is False and out['answer'] == telegram['answer']
+    # el corrector falla -> se descarta
+
+    def broken(seat, prompt):
+        raise TimeoutError()
+    assert synthesis.polish(telegram, {'seat': 'casper'}, broken)['polished'] is False
+
+
+def test_compose_pule_cada_borrador_antes_de_revisarlo():
+    phases = []
+
+    def invoke(seat, prompt):
+        if 'corrector de estilo' in prompt:
+            return json.dumps(dict(DRAFT, answer='Pulido.'))
+        if 'Redactá una respuesta' in prompt:
+            return json.dumps(DRAFT)
+        assert '"Pulido."' in prompt, 'los revisores leen el texto pulido'
+        return json.dumps({'approve': True, 'feedback': ''})
+    result = synthesis.compose(BUNDLE, SEATS, invoke, progress=lambda r: phases.append(r.get('phase')))
+    assert result['answer'] == 'Pulido.' and result['polished'] is True
+    assert phases == ['drafting', 'polishing', 'reviewing']

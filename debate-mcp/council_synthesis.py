@@ -142,6 +142,55 @@ def _is_conceptual(bundle):
     return not bundle.get('artifact') and not bundle.get('production')
 
 
+# Filtro de salida: una pasada de corrección de estilo SIEMPRE, antes de la
+# revisión de fidelidad, con un único encargo — que se entienda. Las reglas y
+# el chequeo automático atajan lo peor, pero un borrador puede cumplirlas y
+# seguir leyéndose como un telegrama; el operador lo dijo sin rodeos.
+POLISH = True
+
+
+def polish(draft, writer, invoke, question='', conceptual=False):
+    """Reescribe el borrador en español claro sin cambiar su contenido.
+    Devuelve el borrador pulido, o el original si el corrector falla."""
+    prompt = (
+        'Sos corrector de estilo del consejo MAGI. Reescribí el texto siguiente para que lo entienda '
+        'una persona atenta que no es especialista en el tema, respondiendo a la pregunta: '
+        f'«{question}».\n'
+        'Reglas: conservá TODO el contenido — ni agregues, ni quites, ni reinterpretes; cada oración '
+        'del original tiene que tener su equivalente. Mantené números, nombres y salvedades. '
+        'Escribí en el idioma de la pregunta (traducí si hace falta). Oraciones completas, cortas y '
+        'encadenadas, en voz activa; nada de fragmentos separados por dos puntos ni punto y coma. '
+        'Explicá entre paréntesis, en seis palabras o menos, cada sigla o término técnico la primera '
+        'vez, salvo los que ya aparecen en la pregunta. Sin anglicismos, sin «las fuentes», sin '
+        'primera persona. Las listas (agreements, differences, open_questions) son una frase clara '
+        'cada una. No uses herramientas.\n'
+        'Devolvé sólo JSON con las mismas claves y el mismo número de elementos por lista: '
+        '{"answer":"...","agreements":[],"differences":[],"open_questions":[],'
+        '"blocking_conditions":[],"deferred_items":[],"next_move":null}.\n'
+        'TEXTO:\n' + json.dumps({k: draft.get(k) for k in ('answer', 'agreements', 'differences',
+                                                         'open_questions', 'blocking_conditions',
+                                                         'deferred_items', 'next_move')}, ensure_ascii=False)
+    )
+    try:
+        polished = parse(invoke(writer, prompt))
+    except Exception as exc:
+        log.warning('Synthesis polish failed (%s); keeping the draft', type(exc).__name__)
+        return dict(draft, polished=False)
+    # El corrector no decide: si perdió o inventó elementos de lista, se
+    # descarta y queda el borrador revisado por reglas.
+    for key in ('agreements', 'differences', 'open_questions'):
+        if len(polished.get(key) or []) != len(draft.get(key) or []):
+            log.warning('Synthesis polish changed the %s list; keeping the draft', key)
+            return dict(draft, polished=False)
+    polished['next_move'] = draft.get('next_move')
+    if conceptual:
+        polished.update(blocking_conditions=[], deferred_items=[])
+    else:
+        polished.update(blocking_conditions=draft.get('blocking_conditions') or [],
+                        deferred_items=draft.get('deferred_items') or [])
+    return dict(polished, polished=True)
+
+
 def compose(bundle, seats, invoke, progress=lambda result: None):
     available = {s['seat']: s for s in seats}
     expected = bundle['heads']
@@ -221,6 +270,9 @@ def compose(bundle, seats, invoke, progress=lambda result: None):
                 log.warning('Synthesis style fix failed (%s); keeping the draft', type(exc).__name__)
                 break
             draft = dict(fixed, blocking_conditions=[], deferred_items=[]) if conceptual else fixed
+        if POLISH:
+            progress(dict(draft, status='generating', phase='polishing', cycle=cycle, current_head=writer['seat']))
+            draft = polish(draft, writer, invoke, bundle.get('question', ''), conceptual)
         draft['style_issues'] = style_issues(draft, conceptual, bundle.get('question', ''))
         progress(dict(draft, status='generating', phase='reviewing', cycle=cycle,
                       current_head='all heads', reviews=[]))
