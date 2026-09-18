@@ -151,10 +151,18 @@ another query without sending it. The send button shows **Ask council**,
 is only offered when opening a decision. During a disconnect sending pauses;
 errors keep your draft and never auto-retry.
 
+Each head's polygon carries the vote word (`YES`, `NO`, `CONDITIONAL`,
+`INFO`, `PENDING`, `ERROR`) as well as the colour, so colour is never the
+only channel. On phones the triangle turns square so its labels stay legible
+and the live activity line moves to the status bar; touch targets are at
+least 44 px on coarse pointers.
+
 **Sound: OFF / ON** enables original 100% synthesized industrial cues:
-contactors on send, a pneumatic press when a head votes, a motor starting for
-execution, a three-impact verdict and a plant siren when the council is stuck
-or execution failed. It starts off, offers volume and
+contactors once the server accepts your message (the result, not the click),
+a pneumatic press when a head votes, a motor starting for execution, a
+three-impact verdict, a short two-pulse plant alert when the council is stuck
+waiting for you, and a distinct falling-tone failure cue when execution or
+merge fails, a head errors out, or a send is rejected. It starts off, offers volume and
 remembers your preference locally. It plays no Evangelion recordings or
 music: everything is synthesized on the fly with WebAudio.
 First load and reconnections don't replay old notifications.
@@ -193,7 +201,14 @@ prepares a **joint synthesis**: one head drafts the answer and every expected
 head reviews it for fidelity to the sources (up to two correction cycles).
 The UI shows the answer, shared points, differences and open questions; a
 draft that didn't clear every review is marked **partial** with the
-outstanding objections. The vote percentage is labeled as vote agreement,
+outstanding objections. The editor writes under fixed style rules — the
+council's voice in the third person (never "my axis"), plain language, at
+most 120 words and five sentences, at most three items per list, no
+commentary on the journal or the process, at most five consolidated
+conditions each a single verifiable sentence, and no conditions at all for
+a question without a repository — and a draft that breaks them is rewritten
+once before the fidelity review. `python council_synthesis.py --retry <id>`
+regenerates the synthesis of a decision by hand. The vote percentage is labeled as vote agreement,
 not factual certainty.
 
 The synthesis card also lists which memory-graph sources the council saw in
@@ -352,7 +367,27 @@ Missing `POSITION` tags no longer turn into implicit `info` votes.
 
 The personas (axes and biases) live in `debate-mcp/personas.py` — the
 provider is just wiring. Switching models is editing heads.json, nothing
-more.
+more. `MAGI_PERSONA_MODE` selects how much of the persona reaches the prompt:
+`off` (no axis, a control), `rhetorical` (axis, guiding question and bias) or
+`behavioral` (the same plus one verifiable obligation per seat before voting:
+Melchior must verify and cite a fact, Balthasar must list who is harmed and
+what is irreversible with a mitigation each, Casper must say what the operator
+actually wants and the cheapest path). The obligations are domain-agnostic —
+a quoted passage or a source counts as much as `file:line` — because the
+council is used for documents and open questions as much as for code; without
+a selected repository the heads are told not to search their working
+directory at all. `persona_ab.py` re-votes past decisions with one model in
+all three seats under each mode and reports vote agreement, unanimity, how
+often the axis is merely recited, and argument diversity (1 − vocabulary
+Jaccard between heads). On 2026-09-17, with Claude in all three seats over 8
+past decisions (4 with a repository, 4 open questions): argument diversity
+83 % (off) / 87 % (rhetorical) / 88 % (behavioral); pairwise vote agreement
+75 / 67 / 79 %. With n=8 the vote differences are noise; the consistent
+effect is on what the heads look at, not on how they vote — the dissent seen
+on the live board comes from the different providers. `behavioral` is the
+default because it keeps the diversity and makes each head's work
+verifiable; `--resume` continues a run cut short by a provider session
+limit.
 
 ## Architecture at a glance
 
