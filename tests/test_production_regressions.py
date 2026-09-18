@@ -71,12 +71,30 @@ def test_inline_timeout_kills_and_reaps_before_unregistering(monkeypatch, tmp_pa
 def test_execution_context_only_retries_explicitly(body, retry):
     conn = Mock()
     conn.execute.return_value.fetchone.side_effect = (
-        [{"id": 1, "status": "executing", "round": 1}, {"id": 9}]
+        [{"id": 1, "status": "executing", "round": 1, "minority_report": {}}, {"id": 9}]
     )
     board.human_message(conn, "d1", body)
     queries = [c.args[0] for c in conn.execute.call_args_list]
     assert not any("DELETE" in q for q in queries)
-    assert any('"execution_state": "pending"' in q for q in queries) == retry
+    updates = [c for c in conn.execute.call_args_list if "jsonb_build_object('execution_state'" in c.args[0]]
+    assert bool(updates) == retry
+    if retry:
+        assert updates[0].args[1] == ("pending", 1)
+
+
+def test_explicit_retry_after_merge_failure_retries_only_the_merge():
+    conn = Mock()
+    conn.execute.return_value.fetchone.side_effect = [
+        {"id": 1, "status": "executing", "round": 1,
+         "minority_report": {"execution_state": "merge_blocked"}},
+        {"id": 9},
+    ]
+
+    board.human_message(conn, "d1", "retry")
+
+    update = next(c for c in conn.execute.call_args_list
+                  if "jsonb_build_object('execution_state'" in c.args[0])
+    assert update.args[1] == ("reviewing", 1)
 
 
 def test_executor_spawn_error_is_persisted_for_manual_retry(monkeypatch):

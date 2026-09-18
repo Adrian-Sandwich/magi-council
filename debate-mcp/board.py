@@ -292,7 +292,7 @@ def human_message(conn, thread: str, body: str, action: str | None = None) -> di
       primera cabeza (los mensajes de adrian con otros kinds no disparan).
     """
     d = conn.execute(
-        "SELECT id, status, round FROM decisions WHERE thread = %s FOR UPDATE", (thread,)
+        "SELECT id, status, round, minority_report FROM decisions WHERE thread = %s FOR UPDATE", (thread,)
     ).fetchone()
     if action is not None and (action not in ("resume", "arbitrate") or d is None or d["status"] != "split"):
         raise ValueError("This response action requires a decision awaiting your input")
@@ -306,11 +306,13 @@ def human_message(conn, thread: str, body: str, action: str | None = None) -> di
         # el journal completo del fallo para auditoría.
         kind = "contexto"
         if _RE_SEGUI.match(body):
+            current_state = (d.get("minority_report") or {}).get("execution_state")
+            retry_state = "reviewing" if current_state == "merge_blocked" else "pending"
             conn.execute(
                 """UPDATE decisions SET minority_report =
                    COALESCE(minority_report, '{}'::jsonb) ||
-                   '{"execution_state": "pending"}'::jsonb
-                   WHERE id = %s""", (d["id"],),
+                   jsonb_build_object('execution_state', %s)
+                   WHERE id = %s""", (retry_state, d["id"]),
             )
     elif d is not None:
         kind = "contexto"
