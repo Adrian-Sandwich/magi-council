@@ -42,6 +42,26 @@ def test_closed_follow_up_reopens_same_dossier():
     assert "- 'approved_conditions'" in update
 
 
+def test_follow_up_after_merged_production_opens_linked_decision(monkeypatch):
+    conn = Mock()
+    conn.execute.return_value.fetchone.return_value = {
+        "id": 28, "thread": "d28", "status": "closed", "round": 7,
+        "artifact": "C:/repo", "minority_report": {"execution_state": "merged"},
+    }
+    monkeypatch.setattr(board, "start_decision", lambda *a, **kw: {
+        "decision_id": 33, "thread": "d33", "seats": ["melchior"], "degraded": [],
+    })
+
+    result = board.follow_up_decision(conn, 28, "qué sigue y qué se hizo?")
+
+    assert result["action"] == "opened_follow_up"
+    assert result["decision_id"] == 33
+    assert result["source_decision_id"] == 28
+    assert result["production"] is False
+    assert not any("SET status = 'open'" in call.args[0]
+                   for call in conn.execute.call_args_list)
+
+
 @pytest.mark.parametrize("text", [
     "pues arréglalo", "vamos con tu plan", "adelante con el plan",
     "haz lo que propones", "aplica la propuesta", "ok sigamos con eso",

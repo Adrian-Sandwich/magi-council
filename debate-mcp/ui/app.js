@@ -751,6 +751,9 @@ async function send(forceNew = false) {
       status.textContent = "context added — the heads will see it on their next turn";
     } else if (data.action === "follow_up") {
       status.textContent = `decision #${data.decision_id} continued — the existing journal and memory stay attached`;
+    } else if (data.action === "opened_follow_up") {
+      focusedId = data.decision_id;
+      status.textContent = `follow-up #${data.decision_id} opened from completed production #${data.source_decision_id}`;
     } else if (data.action === "execution_requested") {
       status.textContent = `decision #${data.decision_id} is entering isolated execution — the diff will be reviewed before merge`;
     } else if (data.action === "corrections_requested") {

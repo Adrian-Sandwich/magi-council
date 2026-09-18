@@ -713,7 +713,9 @@ class Handler(BaseHTTPRequestHandler):
                                       "decision_id": result.get("decision_id", d["id"]),
                                       "action": result.get("action", "execution_requested")}
                         elif action == "followup":
-                            result = {**result, "kind": "decision", "decision_id": d["id"], "action": "follow_up"}
+                            result = {**result, "kind": "decision",
+                                      "decision_id": result.get("decision_id", d["id"]),
+                                      "action": result.get("action", "follow_up")}
                         elif result.get("reopened_decision"):
                             result = {
                                 **result, "decision_id": result["reopened_decision"],

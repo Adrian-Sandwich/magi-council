@@ -530,6 +530,27 @@ def test_council_closed_decision_continues_same_thread(ui_server_conn, monkeypat
     assert calls == {"decision_id": 2, "body": "contexto"}
 
 
+def test_council_merged_follow_up_focuses_linked_decision(ui_server_conn, monkeypatch):
+    port, _, conn = ui_server_conn
+    conn.decisions = [_decision(28, status="closed", ruling="yes")]
+    monkeypatch.setattr(
+        magi_ui.board, "follow_up_decision",
+        lambda c, decision_id, body: {
+            "id": None, "decision_id": 33, "source_decision_id": decision_id,
+            "thread": "d33", "action": "opened_follow_up", "production": False,
+        },
+    )
+    response = _post(port, "/message", {
+        "mode": "council", "body": "qué sigue?", "decision_id": 28,
+        "action": "followup",
+    })
+    result = json.loads(response.read())
+    assert response.status == 201
+    assert result["action"] == "opened_follow_up"
+    assert result["decision_id"] == 33
+    assert result["source_decision_id"] == 28
+
+
 def test_council_closed_approved_evolves_to_execution(ui_server_conn, monkeypatch):
     port, _, conn = ui_server_conn
     conn.decisions = [_decision(2, status="closed", ruling="conditional")]

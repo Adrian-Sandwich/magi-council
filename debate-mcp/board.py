@@ -356,13 +356,30 @@ def human_message(conn, thread: str, body: str, action: str | None = None) -> di
 def follow_up_decision(conn, decision_id: int, body: str) -> dict:
     """Continue a closed decision on its existing thread and dossier."""
     d = conn.execute(
-        "SELECT id, thread, status, round FROM decisions WHERE id = %s FOR UPDATE",
+        "SELECT * FROM decisions WHERE id = %s FOR UPDATE",
         (decision_id,),
     ).fetchone()
     if d is None:
         raise ValueError(f"decisión {decision_id} no existe")
     if d["status"] != "closed":
         raise ValueError(f"decisión {decision_id} todavía está '{d['status']}'")
+    if (d.get("minority_report") or {}).get("execution_state") == "merged":
+        opened = start_decision(
+            conn,
+            title=f"Seguimiento de #{decision_id}: {body}",
+            artifact=d.get("artifact"),
+            protocol="adaptive",
+            production=is_execution_request(body),
+        )
+        conn.execute(
+            """UPDATE decisions SET minority_report =
+               COALESCE(minority_report, '{}'::jsonb) || %s::jsonb
+               WHERE id = %s""",
+            (Json({"follows_decision": decision_id}), opened["decision_id"]),
+        )
+        return {**opened, "id": None, "source_decision_id": decision_id,
+                "action": "opened_follow_up",
+                "production": is_execution_request(body)}
     row = conn.execute(
         """
         INSERT INTO messages (thread, author, kind, body, artifact)

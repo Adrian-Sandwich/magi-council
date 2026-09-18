@@ -235,6 +235,11 @@ in-scope conditions return to the original production decision, the executor
 continues in the same worktree, and MAGI opens a new review for the new exact
 commit. The previous reviews and votes remain in the journal.
 
+After production is already merged, an informational follow-up such as
+**"qué sigue y qué se hizo"** opens a linked follow-up decision. It cannot
+reopen or re-execute the completed production dossier; the new decision keeps
+the repository context and records which completed decision it follows.
+
 Until you ask to implement it, a decision is only **decided**. The conditions from `conditional`
 votes in the approved round are preserved for the executor, including the
 majority's. If execution fails, it
