@@ -10,8 +10,10 @@ La recuperación prioriza el mismo thread, después el repositorio y la coincide
 de términos. Usa fechas del contenido y evita el antiguo relleno de decisiones
 recientes sin relación. Recorre un salto del grafo hacia archivos, código y documentos.
 El contexto enviado tiene un máximo de 6500 caracteres y llega al consejo y al chat.
-El chat busca por la última intervención humana; todavía no pasa un ámbito de
-repositorio o thread al recuperador.
+El chat busca por la última intervención humana y, desde 2026-09-17, acota la
+memoria al repositorio resuelto del thread y al thread mismo, igual que una
+decisión. En las decisiones la consulta léxica arranca por el título: los
+términos se limitan a 24 y un seguimiento largo dejaba el tema fuera.
 
 Validación: pruebas de relevancia, identidad de repositorios, continuidad,
 referencias a mensajes, recorrido de relaciones y presupuesto de contexto.
@@ -25,10 +27,17 @@ El heartbeat y `healthcheck.py` muestran el estado y la última sincronización
 exitosa. Esto actualiza conversaciones y decisiones; las sesiones externas,
 documentación, código y exportación 3D siguen dependiendo del refresh existente.
 
-Se consulta el historial completo de Postgres, pero sólo se reescriben nodos cuyo
-contenido cambió. Los checkpoints se confirman junto con los nodos en SQLite.
-Un reinicio o fallo no pierde cambios pendientes. No es aún una consulta incremental
-por eventos: reducir el volumen leído queda pendiente para historiales grandes.
+Sólo se reescriben nodos cuyo contenido cambió, y desde 2026-09-17 sólo se
+reconsulta lo que pudo cambiar: dos consultas baratas (último `id` de mensaje por
+thread; `md5` de la fila de cada decisión) deciden qué threads y decisiones
+traer completos. Las marcas se confirman junto con los nodos en SQLite; un
+reinicio o fallo no pierde cambios pendientes y el barrido de nodos borrados
+sigue viendo el universo completo. Con el tablero actual (31 threads, ~330
+mensajes) una corrida sin cambios no ejecuta ninguna agregación pesada.
+
+Cada ingestor deja su última corrida en `ingest_runs`; `healthcheck.py` reporta
+la edad de cada fuente por separado, porque el mtime de `memory.db` ya no
+distingue la sincronización continua del refresh horario.
 
 Las declaraciones humanas explícitas se guardan por conversación con fuente y
 versiones. Por ejemplo:
@@ -88,11 +97,34 @@ esos mismos ejemplos: no son una evaluación independiente ni una garantía gene
 El caso de autenticación sigue fallando. Ampliar el conjunto con casos reales,
 negaciones, sinónimos y consultas sin respuesta antes de ajustar más el ranking.
 
-La comparación sigue siendo exhaustiva y crece con el número de vectores. Quedan
-pendientes un índice textual FTS y búsqueda vectorial aproximada para grandes
-historiales. Los pasajes se limitan a 24 por nodo; los documentos largos pueden
-perder cobertura. Las fuentes sin repositorio declarado no pueden aislarse por
-proyecto con la misma garantía que las decisiones que sí lo especifican.
+La comparación sigue siendo exhaustiva, pero desde 2026-09-17 los vectores se
+guardan como `float32` crudo (no JSON) y la similitud es una sola multiplicación
+de matrices con numpy: 64 nodos pasaron de 4.1 MB a 0.77 MB y una consulta tarda
+~2 ms con el modelo cargado. Las filas en JSON anteriores se reindexan solas.
+Quedan pendientes un índice textual FTS y búsqueda vectorial aproximada para
+historiales de miles de nodos. Los pasajes se limitan a 24 por nodo; los
+documentos largos pueden perder cobertura. Las fuentes sin repositorio declarado
+no pueden aislarse por proyecto con la misma garantía que las decisiones que sí
+lo especifican.
+
+**Evaluación con conversaciones reales** (`memory-graph/eval_retrieval.py`):
+cada seguimiento humano del tablero (`contexto`/`arbitraje`, ≥25 caracteres,
+sin reportes de resultado ni mensajes de control) es una consulta y su
+decisión de origen la respuesta; el mensaje se oculta del grafo antes de
+consultar (leave-one-out) y se consulta sin thread. Con 17 seguimientos reales
+el 2026-09-17:
+
+| ámbito | léxico R@1 / R@3 | híbrido R@1 / R@3 |
+|---|---|---|
+| sin repositorio | 0.35 / 0.53 | 0.35 / 0.59 |
+| mismo repositorio | 0.53 / 0.94 | 0.65 / 0.94 |
+
+El ámbito de repositorio pesa más que los embeddings. Lo que no se reencuentra
+son seguimientos sin contenido temático («vamos con lo que falta resolver»,
+«decide tú lo que sea mejor»): ninguna recuperación puede resolverlos sin el
+thread, y en producción esos mensajes sí llegan con thread. Sigue sin ser un
+conjunto calificado a mano: mide reencontrar el dossier de origen, no que fuera
+la mejor memoria disponible.
 
 Referencia del proveedor: https://qdrant.github.io/fastembed/examples/Supported_Models/
 
@@ -166,6 +198,13 @@ $env:CLAMI_TEST_POSTGRES_DSN = 'dbname=debate host=localhost'
 ```
 
 Estas evaluaciones prueban comportamiento, no que los modelos razonen mejor en
-general. Siguen pendientes un conjunto independiente de conversaciones calificadas
-por el usuario, mediciones continuas de latencia/costo y una comparación longitudinal
-de utilidad. La evaluación semántica pequeña del paso 3 sigue siendo de desarrollo.
+general. `debate-mcp/metrics.py` cubre la latencia: p50/p95/máximo, tasa de error
+y timeouts por asiento y tipo de turno a partir de `logs/trigger_events.jsonl`,
+más el tiempo de pared por ronda (del primer disparo al último cierre de la
+tanda; un reintento días después cuenta como otra tanda). Con 30 días de log al
+2026-09-17: melchior (kimi) `answer` p50 156 s / p95 364 s con 26 % de fallos;
+balthasar (codex) y casper (claude) inline p50 32–35 s sin fallos; síntesis
+10–34 s; la etapa Ollama (`api`) p95 15 min con 36–64 % de fallos. El costo en
+dinero no se registra: los CLI no lo exponen. Siguen pendientes un conjunto
+calificado a mano por el usuario y una comparación longitudinal de utilidad;
+la evaluación con seguimientos reales del paso 3 es el sustituto disponible.

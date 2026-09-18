@@ -79,9 +79,14 @@ usually has a command like `kimi mcp add` / `claude mcp add` pointing at
 **Memory graph** (optional but recommended): run `memory-graph/refresh.sh`
 once (ingests your agents' sessions, decisions and READMEs into
 `memory-graph/memory.db`) and schedule it (Windows:
-`schtasks /create /tn "magi-council-memory-refresh" /tr "...bash... refresh.sh" /sc hourly`;
-macOS/Linux: cron or launchd). Without the graph the system works, but the
-heads remember nothing.
+`schtasks /create /tn "ClaMi-memory-refresh" /tr "...bash... refresh.sh" /sc hourly`
+— the task name is yours to pick; macOS/Linux: cron or launchd). Without the
+graph the system works, but the heads remember nothing. The 3D export
+(`export_kgraph.py`) is optional: without a `Node_visualizer` checkout it
+prints a notice and the refresh still succeeds. Each ingestor records its
+last run in `memory.db`, and `healthcheck.py` reports the age of every
+source separately — the relay's 30-second conversation sync keeps the file
+fresh, so the file's mtime alone says nothing about sessions, docs or code.
 
 The relay also syncs conversations and decisions into the graph continuously
 (the heartbeat and `healthcheck.py` show the last sync). Retrieval is
@@ -95,7 +100,11 @@ declarations you write in chat (`Objetivo: …`, `Restricción [datos]: …`,
 `Pendiente [pruebas]: …`) are kept per conversation as sourced, versioned
 facts.
 
-System status at any time: `.venv/bin/python healthcheck.py`.
+System status at any time: `.venv/bin/python healthcheck.py`. Latency, error
+and timeout rates per seat and turn type (from `logs/trigger_events.jsonl`):
+`.venv/bin/python metrics.py --days 30`. Retrieval quality against your own
+board's real follow-ups: `memory-graph/eval_retrieval.py` (leave-one-out;
+see `docs/memory-evolution.md`).
 
 ## How you use it (the web, in 30 seconds)
 
