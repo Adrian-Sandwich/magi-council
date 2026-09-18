@@ -76,6 +76,10 @@ class FakeConn:
         elif q.startswith("SELECT decision_id, head, round, position"):
             ids = params[0]
             rows = [p for p in self.positions if p["decision_id"] in ids]
+        elif q.startswith("UPDATE decisions SET minority_report"):
+            # fuentes de memoria de la ronda (_registrar_fuentes_de_memoria)
+            self.updates = getattr(self, "updates", []) + [params]
+            rows = []
         else:
             raise AssertionError(f"query inesperada: {q}")
         return _Result(rows)
@@ -744,7 +748,7 @@ def test_la_memoria_del_grafo_entra_al_prompt_de_la_cabeza(fired_magi, monkeypat
     memoria llega a todas las cabezas (es contexto compartido). Sin grafo
     (degradado) los prompts no cambian."""
     import memory_ctx
-    monkeypatch.setattr(memory_ctx, "memoria_para", lambda t, a=None, thread=None: "MEMORIA-PRUEBA-X")
+    monkeypatch.setattr(memory_ctx, "memoria_con_fuentes", lambda t, a=None, thread=None: ("MEMORIA-PRUEBA-X", ["decision:1"]))
     relay.process_cycle(FakeConn([], decisions=[mk_decision_row()]), fresh_state())
     assert fired_magi, "tiene que haber disparos"
     assert all("MEMORIA-PRUEBA-X" in c["prompt"] for c in fired_magi)
@@ -1118,8 +1122,8 @@ def test_la_consulta_a_memoria_empieza_por_el_titulo(fired_magi, monkeypatch):
     va primero, el tema de la decisión queda fuera de la consulta léxica."""
     import memory_ctx
     seen = []
-    monkeypatch.setattr(memory_ctx, "memoria_para",
-                        lambda q, a=None, thread=None: seen.append((q, a, thread)) or "")
+    monkeypatch.setattr(memory_ctx, "memoria_con_fuentes",
+                        lambda q, a=None, thread=None: seen.append((q, a, thread)) or ("", []))
     relay.process_cycle(FakeConn([], decisions=[mk_decision_row(artifact="/repo/z")]), fresh_state())
     assert seen and seen[0][0].startswith("¿Hubo un ataque?")
     assert seen[0][1:] == ("/repo/z", "d-42")
@@ -1152,3 +1156,86 @@ def test_is_timeout_reconoce_el_timeout_envuelto_por_urllib():
     assert relay._is_timeout(urllib.error.URLError(TimeoutError("timed out")))
     assert not relay._is_timeout(urllib.error.URLError(ConnectionRefusedError()))
     assert not relay._is_timeout(RuntimeError("otra cosa"))
+
+
+# ------------------------------------------------- crash de arranque del CLI
+
+class _FakeProc:
+    """Popen de mentira: escribe `output` en el stdout que le pasaron y sale
+    con `rc`. Sirve para probar _run_cli_inline sin lanzar nada."""
+    pid = 4242
+
+    def __init__(self, rc, output=b""):
+        self.rc, self.output = rc, output
+
+    def wait(self, timeout=None):
+        return self.rc
+
+
+def _fake_popen(outcomes):
+    """Cada llamada consume el siguiente (rc, salida) de la lista."""
+    calls = []
+
+    def popen(command, cwd=None, stdin=None, stdout=None, stderr=None, **kw):
+        rc, output = outcomes.pop(0)
+        stdout.write(output)
+        calls.append(command)
+        return _FakeProc(rc, output)
+    return popen, calls
+
+
+def test_cli_que_muere_al_arrancar_sin_salida_se_reintenta_una_vez(monkeypatch, tmp_path):
+    """kimi.exe murió dos veces el 2026-09-17 a 1–2 s del arranque con log
+    vacío (rc=1 y 0xC0000005); el turno quedaba en ERROR esperando un clic
+    humano por un fallo que no tenía que ver con el prompt."""
+    _isolate(monkeypatch, tmp_path)
+    popen, calls = _fake_popen([(3221225477, b""), (0, b"POSITION: yes\nlisto")])
+    monkeypatch.setattr(relay.subprocess, "Popen", popen)
+    monkeypatch.setattr(relay.time, "sleep", lambda s: None)
+    seat = {"seat": "melchior", "bin": "/fake/kimi", "args": ["-p"], "journal": "inline"}
+    assert relay._run_cli_inline(seat, "prompt", str(tmp_path), 60, token="d1::melchior").endswith("listo")
+    assert len(calls) == 2
+    events = [json.loads(l)["event"] for l in (tmp_path / "events.jsonl").read_text().splitlines()]
+    assert "trigger_fast_crash" in events
+
+
+def test_cli_que_falla_con_salida_o_dos_veces_no_se_reintenta_mas(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setattr(relay.time, "sleep", lambda s: None)
+    seat = {"seat": "melchior", "bin": "/fake/kimi", "args": ["-p"], "journal": "inline"}
+    # con salida: es un fallo real del turno, no un crash de arranque
+    popen, calls = _fake_popen([(1, b"error: cuota agotada")])
+    monkeypatch.setattr(relay.subprocess, "Popen", popen)
+    with pytest.raises(RuntimeError, match="cuota agotada"):
+        relay._run_cli_inline(seat, "prompt", str(tmp_path), 60)
+    assert len(calls) == 1
+    # dos crashes seguidos: se reporta el segundo, no se insiste
+    popen, calls = _fake_popen([(1, b""), (1, b"")])
+    monkeypatch.setattr(relay.subprocess, "Popen", popen)
+    with pytest.raises(RuntimeError, match="rc=1"):
+        relay._run_cli_inline(seat, "prompt", str(tmp_path), 60)
+    assert len(calls) == 2
+
+
+def test_las_fuentes_de_memoria_quedan_en_el_dossier_una_vez_por_ronda(fired_magi, monkeypatch):
+    """El operador califica después la memoria que vio el consejo: hay que
+    saber QUÉ nodos entraron al prompt de esta ronda. Se guarda una vez por
+    ronda (las tres cabezas comparten el bloque) y no se repite en el
+    siguiente ciclo del relay."""
+    import memory_ctx
+    monkeypatch.setattr(memory_ctx, "memoria_con_fuentes",
+                        lambda t, a=None, thread=None: ("MEM", ["decision:7", "debate_thread:d7"]))
+    conn = FakeConn([], decisions=[mk_decision_row(round=2)])
+    relay.process_cycle(conn, fresh_state())
+    assert len(conn.updates) == 1
+    payload, decision_id = conn.updates[0]
+    assert decision_id == 42
+    assert payload.obj == {"memory_sources": {"round": 2, "ids": ["decision:7", "debate_thread:d7"]}}
+    # el dossier en memoria ya lo tiene: otro ciclo no vuelve a escribir
+    relay.process_cycle(conn, fresh_state())
+    assert len(conn.updates) == 1
+    # sin memoria no hay nada que registrar
+    monkeypatch.setattr(memory_ctx, "memoria_con_fuentes", lambda t, a=None, thread=None: ("", []))
+    conn2 = FakeConn([], decisions=[mk_decision_row()])
+    relay.process_cycle(conn2, fresh_state())
+    assert not getattr(conn2, "updates", [])

@@ -740,13 +740,22 @@ def fire_api_chat_turn(seat_info: dict, thread: str, cwd: str | None = None) -> 
 
 # ------------------------------------------- cabezas CLI sin MCP (journal inline)
 
+# Un CLI que muere en los primeros segundos sin escribir nada no falló por
+# el prompt: es un crash de arranque (visto el 2026-09-17 con kimi.exe:
+# rc=1 a los 2s y 0xC0000005 a 1s, log vacío, justo después de otro turno
+# suyo). Se reintenta UNA vez tras una pausa antes de marcar el turno en ERROR.
+FAST_CRASH_SECS = 5
+FAST_CRASH_RETRY_DELAY = 3
+
+
 def _run_cli_inline(seat_info: dict, prompt: str, cwd: str, timeout: int,
-                    token: str | None = None) -> str:
+                    token: str | None = None, _retried: bool = False) -> str:
     """Corre una cabeza CLI con el prompt por STDIN (archivo temporal) y
     devuelve su stdout completo. STDIN en vez de argv: los prompts de turno
     tienen comillas y tildes que el re-quoting de shims .cmd (codex.cmd)
     rompería; y `codex exec -` lee el prompt de stdin de todos modos. Si
     pasa un token, el proceso queda registrado para poder abortarlo."""
+    started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix=f"magi-{seat_info['seat']}-") as tmp:
         pin = Path(tmp) / "prompt.txt"
         pout = Path(tmp) / "out.txt"
@@ -790,6 +799,14 @@ def _run_cli_inline(seat_info: dict, prompt: str, cwd: str, timeout: int,
                     _prune_trigger_logs(prefix)
         text = _decode_cli_output(pout.read_bytes())
     if rc != 0:
+        elapsed = time.monotonic() - started
+        if not _retried and elapsed < FAST_CRASH_SECS and not text.strip():
+            log.warning("%s murió al arrancar (rc=%s en %.1fs, sin salida); reintento en %ss",
+                        seat_info["seat"], rc, elapsed, FAST_CRASH_RETRY_DELAY)
+            event("trigger_fast_crash", token=token, author=seat_info["seat"], rc=rc,
+                  thread=token.split("::", 1)[0] if token else None, duration_s=round(elapsed, 1))
+            time.sleep(FAST_CRASH_RETRY_DELAY)
+            return _run_cli_inline(seat_info, prompt, cwd, timeout, token, _retried=True)
         raise RuntimeError(f"{seat_info['seat']} salió rc={rc}: {text[-300:]}")
     return text
 
@@ -927,6 +944,29 @@ def _persona_text(seat: str) -> str:
     return f"Sos el asiento '{seat}' del sistema MAGI."
 
 
+def _registrar_fuentes_de_memoria(conn, d: dict, fuentes: list[str]) -> None:
+    """Deja en el dossier qué nodos del grafo vio el consejo en esta ronda,
+    para que el operador pueda calificar esa memoria (¿sirvió?). Una vez por
+    ronda: las tres cabezas reciben el mismo bloque."""
+    previous = (d.get("minority_report") or {}).get("memory_sources") or {}
+    if not fuentes or previous.get("round") == d["round"]:
+        return
+    record = {"round": d["round"], "ids": fuentes}
+    try:
+        with conn.transaction():
+            conn.execute(
+                """UPDATE decisions SET minority_report = COALESCE(minority_report, '{}'::jsonb) || %s::jsonb
+                   WHERE id = %s""",
+                (Json({"memory_sources": record}), d["id"]),
+            )
+    except Exception as exc:  # la memoria es contexto; no puede frenar el turno
+        log.warning("no pude registrar las fuentes de memoria de #%s: %s", d["id"], exc)
+        return
+    if not d.get("minority_report"):
+        d["minority_report"] = {}
+    d["minority_report"]["memory_sources"] = record
+
+
 def fire_decision_turns(conn, state: dict, d: dict) -> None:
     """Dispara los asientos que el motor dice que faltan en la ronda actual.
 
@@ -982,7 +1022,8 @@ def fire_decision_turns(conn, state: dict, d: dict) -> None:
                      if m.get('author') == 'adrian'), '')
     # El título va primero: los términos de búsqueda se acotan y un follow-up
     # largo dejaba el tema de la decisión fuera de la consulta léxica.
-    memoria = memory_ctx.memoria_para(d['title'] + ' ' + followup, d.get('artifact'), thread=d['thread'])
+    memoria, fuentes = memory_ctx.memoria_con_fuentes(d['title'] + ' ' + followup, d.get('artifact'), thread=d['thread'])
+    _registrar_fuentes_de_memoria(conn, d, fuentes)
 
     for turn in turns:
         if turn['seat'] in turn_errors.active(d):
