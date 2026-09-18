@@ -19,9 +19,14 @@ Hoy la única red de seguridad es correr `pytest` a mano en Windows.
 | 1.2 | Postgres en CI: servicio `postgres:16` en el job de Ubuntu con `CLAMI_TEST_POSTGRES_DSN`, corriendo `schema/migrate.py` antes. En Windows se saltan (ya lo hacen). | `test_outcomes` y `test_production_git` (parte Postgres) corren en Ubuntu. |
 | 1.3 | Navegador en CI: `playwright install chromium` en Ubuntu y `CLAMI_BROWSER_PATH` apuntando a él. | Los 17 tests de `test_ux_browser.py` corren en CI. |
 | 1.4 | `ruff` (sólo errores: F, E9) como paso previo. | Un import roto o una variable sin definir falla antes de los tests. |
-| 1.5 | Rama protegida: `main` exige CI verde. | Un push directo con la suite rota es rechazado. |
+| 1.5 | Rama protegida: `main` sin force-push ni borrado. Exigir CI verde en cada push implica pasar a flujo por PR (un commit nuevo nunca tiene checks antes de pushearse); es decisión del operador, no se activó. | Force-push y borrado rechazados en `main`. |
 
-Dependencias: ninguna. Es lo primero porque todo lo demás se mide con esto.
+**Hecho el 2026-09-18** (`83a5a57`, `708744a`): dos jobs (Ubuntu con Postgres 16
+y Chromium; Windows), ruff de errores, badge en el README. El primer run
+encontró tres fallos que la máquina de desarrollo no mostraba (numpy asumido
+sin fastembed, un test de navegador desactualizado, y los tests de Postgres
+que nunca habían corrido aquí). Dependencias: ninguna. Es lo primero porque
+todo lo demás se mide con esto.
 
 ## 2. Ejecutor confiable — demostrar el ciclo plan → diff → merge (3–5 días)
 
