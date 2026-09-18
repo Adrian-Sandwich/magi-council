@@ -392,3 +392,19 @@ def test_sonido_de_actividad_mientras_piensan_y_se_apaga_al_cerrar(page):
     assert page.evaluate("MagiSound.thinkingActive") is True
     page.locator("#sound-toggle").click()  # apagar el sonido corta la actividad
     assert page.evaluate("MagiSound.thinkingActive") is False
+
+
+def test_boton_mergear_con_dos_tercios_solo_con_revision_mayoritaria(page):
+    data = snapshot("executing")
+    data["decisions"][0].update(execution_state="merge_blocked",
+                                badge={"text": "MERGE PENDING", "color": "#ff8d00", "flicker": False},
+                                review={"id": 31, "status": "closed", "ruling": "yes", "confidence": 0.66})
+    feed(page, data)
+    assert page.locator("#c-merge").is_visible()
+    data["decisions"][0]["review"]["confidence"] = 0.5
+    feed(page, data)
+    assert not page.locator("#c-merge").is_visible()
+    data["decisions"][0]["review"]["confidence"] = 0.66
+    data["decisions"][0]["merge_override"] = {"review_id": 31}
+    feed(page, data)
+    assert not page.locator("#c-merge").is_visible(), "ya autorizado: el relay está en ello"

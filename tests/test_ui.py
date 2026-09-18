@@ -952,3 +952,26 @@ def test_el_token_de_sesion_persiste_entre_reinicios(tmp_path, monkeypatch):
     (tmp_path / "ui_token").write_text("no válido!")
     assert magi_ui._session_token() != first
     assert len(magi_ui._session_token()) >= 16
+
+
+def test_merge_majority_endpoint_y_estado_con_revision(ui_server_conn, monkeypatch):
+    port, _, conn = ui_server_conn
+    calls = []
+    monkeypatch.setattr(magi_ui.board, "merge_by_majority",
+                        lambda db, did: calls.append(did) or {"decision_id": did, "review_id": 31, "action": "merge_authorized"})
+    resp = _post(port, "/merge-majority", {"decision_id": 28})
+    assert resp.status == 200 and json.loads(resp.read())["review_id"] == 31 and calls == [28]
+
+    def refuse(db, did):
+        raise ValueError("no")
+    monkeypatch.setattr(magi_ui.board, "merge_by_majority", refuse)
+    assert _post(port, "/merge-majority", {"decision_id": 28}).status == 409
+
+    conn = FakeUiConn()
+    d = _decision(28, status="executing", ruling="yes",
+                  minority_report={"execution_state": "merge_blocked", "execution": {"review_id": 31}})
+    d["review"] = {"id": 31, "status": "closed", "ruling": "yes", "confidence": 0.66}
+    conn.decisions = [d]
+    state = magi_ui.build_state(conn)["decisions"][0]
+    assert state["review"]["confidence"] == 0.66 and state["execution_state"] == "merge_blocked"
+    assert state["merge_override"] is None

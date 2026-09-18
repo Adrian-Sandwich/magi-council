@@ -151,3 +151,49 @@ def test_execute_approved_review_resumes_parent_with_conditions():
     assert patch["approved_conditions"] == ["move playtests", "add history test"]
     assert "hallazgos explícitamente diferidos" in patch["approved_plan"]
     assert update.args[1][1] == 28
+
+
+def test_merge_by_majority_autoriza_solo_una_revision_aprobada_2_de_3():
+    """La #28 quedó tres veces en MERGE PENDIENTE sin salida desde la
+    pantalla. El operador puede autorizar el merge de una revisión aprobada
+    por 2/3; queda como arbitraje en el journal y el relay integra con las
+    comprobaciones de siempre."""
+    import pytest
+    import board
+    rows = {
+        28: {"id": 28, "thread": "d28", "status": "executing",
+             "minority_report": {"execution_state": "merge_blocked", "execution": {"review_id": 31}}},
+        31: {"id": 31, "thread": "d31", "status": "closed", "ruling": "yes", "confidence": 0.66},
+    }
+    written = []
+
+    class _One:
+        def __init__(self, row):
+            self.row = row
+
+        def fetchone(self):
+            return self.row
+
+    class Conn:
+        def execute(self, query, params=()):
+            q = " ".join(query.split())
+            if q.startswith("SELECT * FROM decisions"):
+                return _One(rows.get(params[0]))
+            written.append((q, params))
+            return _One(None)
+
+    result = board.merge_by_majority(Conn(), 28)
+    assert result == {"decision_id": 28, "review_id": 31, "action": "merge_authorized"}
+    update, insert = written
+    assert update[1][0].obj == {"merge_override": {"review_id": 31, "by": "adrian"}, "execution_state": "reviewing"}
+    assert insert[1][0] == "d28" and "MERGE AUTORIZADO POR MAYORÍA" in insert[1][1]
+
+    rows[31]["confidence"] = 0.5
+    with pytest.raises(ValueError, match="mayoría"):
+        board.merge_by_majority(Conn(), 28)
+    rows[31].update(confidence=0.66, ruling="conditional")
+    with pytest.raises(ValueError, match="aprobando"):
+        board.merge_by_majority(Conn(), 28)
+    rows[28]["minority_report"]["execution_state"] = "reviewing"
+    with pytest.raises(ValueError, match="merge pendiente"):
+        board.merge_by_majority(Conn(), 28)

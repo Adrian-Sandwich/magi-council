@@ -730,6 +730,12 @@ function render() {
   const abortBtn = document.getElementById("c-abort");
   document.getElementById("c-retry").hidden = uiMode !== "council" || !Object.keys(d?.turn_errors || {}).length;
   document.getElementById("c-retry").disabled = sending || !connected;
+  // Revisión aprobada por 2/3 pero no unánime: el merge queda pendiente y el
+  // operador puede autorizarlo desde acá (antes no había salida en pantalla).
+  const majority = d?.status === "executing" && d.execution_state === "merge_blocked"
+    && d.review?.ruling === "yes" && Number(d.review?.confidence) >= 0.66 && !d.merge_override;
+  document.getElementById("c-merge").hidden = uiMode !== "council" || !majority;
+  document.getElementById("c-merge").disabled = sending || !connected;
   abortBtn.hidden = !(uiMode === "council" && d && ["open", "split", "executing"].includes(d.status));
   // NEW abre decisión nueva salteando la heurística; en CHAT no aplica
   document.getElementById("c-new").hidden = uiMode !== "council";
@@ -839,6 +845,25 @@ async function abortDecision() {
 }
 
 document.getElementById("c-abort").addEventListener("click", abortDecision);
+
+document.getElementById("c-merge").addEventListener("click", async () => {
+  const d = focused();
+  if (!d || sending || !connected) return;
+  const status = document.getElementById("c-status");
+  sending = true;
+  render();
+  try {
+    const resp = await postJSON("/merge-majority", {decision_id: d.id});
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || resp.statusText);
+    status.textContent = `Merge autorizado con 2/3 para la revisión #${data.review_id}; el relay lo integra si la base sigue intacta.`;
+  } catch (err) {
+    status.textContent = `error: ${err.message}`;
+  } finally {
+    sending = false;
+    render();
+  }
+});
 
 document.getElementById("c-retry").addEventListener("click", async () => {
   const d = focused();

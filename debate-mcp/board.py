@@ -553,6 +553,41 @@ def execute_approved_decision(conn, decision_id: int, body: str) -> dict:
             "thread": d["thread"], "action": "execution_requested"}
 
 
+def merge_by_majority(conn, decision_id: int) -> dict:
+    """El operador autoriza integrar una revisión aprobada por 2/3 (no
+    unánime). Hoy eso quedaba en MERGE PENDIENTE sin salida desde la
+    pantalla (#28 tres veces). Sólo aplica a esa revisión, queda en el
+    journal como arbitraje, y el merge lo hace el relay con las mismas
+    comprobaciones de siempre (base intacta, worktree limpio, commit exacto)."""
+    d = conn.execute(
+        "SELECT * FROM decisions WHERE id = %s FOR UPDATE", (decision_id,)
+    ).fetchone()
+    if d is None:
+        raise ValueError(f"decisión {decision_id} no existe")
+    mr = d.get("minority_report") or {}
+    if d["status"] != "executing" or mr.get("execution_state") != "merge_blocked":
+        raise ValueError("sólo una ejecución con merge pendiente puede autorizarse por mayoría")
+    review_id = (mr.get("execution") or {}).get("review_id")
+    rev = conn.execute("SELECT * FROM decisions WHERE id = %s", (review_id,)).fetchone() if review_id else None
+    if not rev or rev["status"] != "closed" or rev.get("ruling") != "yes":
+        raise ValueError("la revisión no cerró aprobando el commit")
+    if (rev.get("confidence") or 0) < decision.CONFIDENCE_MAJORITY:
+        raise ValueError("la revisión no alcanzó mayoría de 2/3")
+    override = {"review_id": rev["id"], "by": "adrian"}
+    conn.execute(
+        """UPDATE decisions SET minority_report = COALESCE(minority_report, '{}'::jsonb) || %s::jsonb
+           WHERE id = %s""",
+        (Json({"merge_override": override, "execution_state": "reviewing"}), decision_id),
+    )
+    conn.execute(
+        """INSERT INTO messages (thread, author, kind, body, artifact)
+           VALUES (%s, 'adrian', 'arbitraje', %s, NULL)""",
+        (d["thread"], f"MERGE AUTORIZADO POR MAYORÍA — el operador integra la revisión #{rev['id']} "
+                      f"aprobada 2/3; el relay verificará base, worktree y commit antes de mergear."),
+    )
+    return {"decision_id": decision_id, "review_id": rev["id"], "action": "merge_authorized"}
+
+
 def abort_decision(conn, decision_id: int) -> dict | None:
     """Aborta una decisión abierta, en STALEMATE o en ejecución: cierra con
     el flag 'aborted' en el dossier (no es un ruling, es un corte del

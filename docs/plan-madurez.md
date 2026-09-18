@@ -54,6 +54,17 @@ Las 4 fallas registradas están en la #28 y son de plomería, no del modelo:
 
 Dependencias: 1 (los tests de 2.x corren en CI). 2.5 necesita 2.1–2.4.
 
+**Hecho el 2026-09-18** — 2.1 (directorio estable `logs/executor/<thread>/`,
+también para los turnos de cabeza en `logs/turns/`), 2.2 (causa etiquetada
+`timeout/crash/error/sin_cambios/sin_commit/entorno` + últimas 40 líneas
+del log en el journal + `execution_cause` en el dossier), 2.4 (reintento
+único ante crash de arranque) y 2.6 (`board.merge_by_majority`, endpoint
+`/merge-majority`, botón **Mergear con 2/3**; el relay integra sólo esa
+revisión y lo anota como arbitraje). 2.3 ya existía en el relay
+(`commit_execution`) — la falla "sin commit" de la #28 era anterior a ese
+cambio; ahora además se clasifica. Pendiente: 2.5, la corrida de aceptación
+con 10 planes reales.
+
 ## 3. Lazo de calidad — que «¿sirve?» tenga datos (2–3 días + uso)
 
 Existen outcomes (`¿Cómo salió?`) y etiquetas de memoria (👍/👎) pero nadie las

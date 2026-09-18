@@ -170,7 +170,9 @@ def build_state(conn) -> dict:
         SELECT id, title, artifact, protocol, status, ruling, confidence, round, thread, heads, minority_report, production,
                (SELECT COALESCE(max(id),0) FROM messages WHERE thread=decisions.thread) AS journal_version,
                (SELECT to_jsonb(o) FROM decision_outcomes o WHERE decision_id=decisions.id ORDER BY o.id DESC LIMIT 1) AS outcome,
-               (SELECT to_jsonb(f) FROM memory_feedback f WHERE decision_id=decisions.id ORDER BY f.id DESC LIMIT 1) AS memory_feedback
+               (SELECT to_jsonb(f) FROM memory_feedback f WHERE decision_id=decisions.id ORDER BY f.id DESC LIMIT 1) AS memory_feedback,
+               (SELECT jsonb_build_object('id', r.id, 'status', r.status, 'ruling', r.ruling, 'confidence', r.confidence)
+                  FROM decisions r WHERE r.id::text = decisions.minority_report->'execution'->>'review_id') AS review
         FROM decisions WHERE status IN ('open', 'split', 'executing') ORDER BY id
         """
     ).fetchall()
@@ -275,6 +277,9 @@ def build_state(conn) -> dict:
             "outcome": r.get('outcome'),
             "memory_sources": mr.get("memory_sources"),
             "memory_feedback": r.get("memory_feedback"),
+            "review": r.get("review"),
+            "execution_cause": mr.get("execution_cause"),
+            "merge_override": mr.get("merge_override"),
             "seats": seats, "journal": journal,
         })
 
@@ -522,7 +527,7 @@ class Handler(BaseHTTPRequestHandler):
     # ---------------------------------------------------------- POST
 
     def do_POST(self) -> None:
-        if self.path not in ("/start", "/message", "/abort", "/outcome", "/retry-turns", "/continuation", "/memory-feedback"):
+        if self.path not in ("/start", "/message", "/abort", "/outcome", "/retry-turns", "/continuation", "/memory-feedback", "/merge-majority"):
             self._send_json({"error": "not found"}, 404)
             return
 
@@ -569,6 +574,8 @@ class Handler(BaseHTTPRequestHandler):
             self._outcome(payload)
         elif self.path == "/memory-feedback":
             self._memory_feedback(payload)
+        elif self.path == "/merge-majority":
+            self._merge_majority(payload)
         elif self.path == "/continuation":
             self._continuation(payload)
         else:
@@ -594,6 +601,15 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(result, 201)
         except ValueError as exc:
             self._send_json({'error': str(exc)}, 400)
+
+    def _merge_majority(self, payload):
+        try:
+            with connect() as conn:
+                with conn.transaction():
+                    result = board.merge_by_majority(conn, int(payload.get("decision_id") or 0))
+            self._send_json(result, 200)
+        except (ValueError, TypeError) as exc:
+            self._send_json({"error": str(exc)}, 409)
 
     def _memory_feedback(self, payload):
         try:

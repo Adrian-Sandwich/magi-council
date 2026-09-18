@@ -60,7 +60,6 @@ import re
 import signal
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from datetime import datetime, timezone
@@ -806,48 +805,54 @@ def _run_cli_inline(seat_info: dict, prompt: str, cwd: str, timeout: int,
     rompería; y `codex exec -` lee el prompt de stdin de todos modos. Si
     pasa un token, el proceso queda registrado para poder abortarlo."""
     started = time.monotonic()
-    with tempfile.TemporaryDirectory(prefix=f"magi-{seat_info['seat']}-") as tmp:
-        pin = Path(tmp) / "prompt.txt"
-        pout = Path(tmp) / "out.txt"
-        pin.write_text(prompt, encoding="utf-8")
-        with pin.open("rb") as fin, pout.open("wb") as fout:
-            command = [seat_info["bin"], *seat_info.get("args", [])]
-            transport = seat_info.get('prompt_transport', 'stdin')
-            if transport == 'file':
-                command.append(f'Read the UTF-8 task file at {pin} and follow its instructions. '
-                               'Return your final answer using the exact format requested in that file.')
-            elif transport == 'argument':
-                command.append(prompt)
-            elif transport == 'stdin-only':
-                pass  # Claude -p reads stdin without a positional '-' argument.
-            else:
-                command.append('-')
-            proc = subprocess.Popen(
-                command,
-                cwd=cwd, stdin=fin, stdout=fout, stderr=subprocess.STDOUT,
-                **({"start_new_session": True} if os.name == "posix" else {}),
-            )
+    # Directorio estable por thread+asiento en vez de un tempdir por turno:
+    # en Windows la limpieza del tempdir puede fallar (WinError 32) mientras
+    # el CLI o un hijo suyo todavía tiene el archivo abierto, y esa excepción
+    # convertía un turno terminado en un fallo. Los archivos se sobreescriben.
+    slot = re.sub(r'[^A-Za-z0-9_.-]', '_', (token or f"{seat_info['seat']}-{os.getpid()}-{threading.get_ident()}").replace('::', '_'))
+    tmp = LOG_DIR / "turns" / slot
+    tmp.mkdir(parents=True, exist_ok=True)
+    pin = Path(tmp) / "prompt.txt"
+    pout = Path(tmp) / "out.txt"
+    pin.write_text(prompt, encoding="utf-8")
+    with pin.open("rb") as fin, pout.open("wb") as fout:
+        command = [seat_info["bin"], *seat_info.get("args", [])]
+        transport = seat_info.get('prompt_transport', 'stdin')
+        if transport == 'file':
+            command.append(f'Read the UTF-8 task file at {pin} and follow its instructions. '
+                           'Return your final answer using the exact format requested in that file.')
+        elif transport == 'argument':
+            command.append(prompt)
+        elif transport == 'stdin-only':
+            pass  # Claude -p reads stdin without a positional '-' argument.
+        else:
+            command.append('-')
+        proc = subprocess.Popen(
+            command,
+            cwd=cwd, stdin=fin, stdout=fout, stderr=subprocess.STDOUT,
+            **({"start_new_session": True} if os.name == "posix" else {}),
+        )
+        if token is not None:
+            with _procs_lock:
+                _procs[token] = proc
+            event("trigger_pid", token=token, pid=proc.pid,
+                  thread=token.split("::", 1)[0], author=seat_info["seat"])
+        try:
+            rc = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_tree(proc)
+            proc.wait()
+            raise
+        finally:
             if token is not None:
                 with _procs_lock:
-                    _procs[token] = proc
-                event("trigger_pid", token=token, pid=proc.pid,
-                      thread=token.split("::", 1)[0], author=seat_info["seat"])
-            try:
-                rc = proc.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                _kill_tree(proc)
-                proc.wait()
-                raise
-            finally:
-                if token is not None:
-                    with _procs_lock:
-                        _procs.pop(token, None)
-                    prefix = re.sub(r'[^A-Za-z0-9_.-]', '_', token.replace('::', '_')) + '_'
-                    log_path = LOG_DIR / f'{prefix}{_log_stamp()}.log'
-                    fout.flush()
-                    log_path.write_bytes(pout.read_bytes())
-                    _prune_trigger_logs(prefix)
-        text = _decode_cli_output(pout.read_bytes())
+                    _procs.pop(token, None)
+                prefix = re.sub(r'[^A-Za-z0-9_.-]', '_', token.replace('::', '_')) + '_'
+                log_path = LOG_DIR / f'{prefix}{_log_stamp()}.log'
+                fout.flush()
+                log_path.write_bytes(pout.read_bytes())
+                _prune_trigger_logs(prefix)
+    text = _decode_cli_output(pout.read_bytes())
     if rc != 0:
         elapsed = time.monotonic() - started
         if not _retried and elapsed < FAST_CRASH_SECS and not text.strip():
@@ -1515,20 +1520,53 @@ def _condiciones_aprobacion(d: dict) -> list[str]:
     return out
 
 
-def _execution_failed(d: dict, detail: str) -> None:
+# Causas de fallo del ejecutor, para el journal y las métricas. Antes todo
+# era "rc=-1" o un traceback: no se distinguía un modelo que se negó de un
+# proceso que murió al arrancar.
+EXECUTION_CAUSES = {
+    "timeout": "el ejecutor superó el tiempo máximo y fue detenido",
+    "crash": "el proceso del ejecutor murió sin producir salida",
+    "error": "el ejecutor terminó con error",
+    "sin_cambios": "el ejecutor terminó sin producir cambios",
+    "sin_commit": "quedaron cambios que no se pudieron confirmar",
+    "entorno": "falló el entorno de ejecución (git, binario, disco)",
+}
+LOG_TAIL_LINES = 40
+LOG_TAIL_CHARS = 2000
+
+
+def _log_tail(path: Path) -> str:
+    """Las últimas líneas del log del ejecutor, para que la causa del fallo
+    esté en el journal y no sólo en un archivo que nadie abre."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    tail = "\n".join(text.strip().splitlines()[-LOG_TAIL_LINES:])
+    return tail[-LOG_TAIL_CHARS:]
+
+
+def _execution_failed(d: dict, detail: str, cause: str = "error", log_path: Path | None = None) -> None:
     """Persist failure and its explanation together; retries keep the journal."""
+    label = EXECUTION_CAUSES.get(cause, EXECUTION_CAUSES["error"])
+    tail = _log_tail(log_path) if log_path else ""
+    body = f"EJECUCIÓN FALLIDA [{cause}] — {label}: {detail}."
+    if tail:
+        body += f"\nÚltimas líneas del ejecutor:\n{tail}"
+    body += "\nEscribí 'seguí' para reintentar o abortá la decisión."
     with connect() as conn:
         with conn.transaction():
             conn.execute(
                 """UPDATE decisions SET minority_report =
-                   COALESCE(minority_report, '{}'::jsonb) ||
-                   '{"execution_state": "failed", "execution_activity": null}'::jsonb
-                   WHERE id = %s AND status = 'executing'""", (d["id"],),
+                   COALESCE(minority_report, '{}'::jsonb) || %s::jsonb
+                   WHERE id = %s AND status = 'executing'""",
+                (Json({"execution_state": "failed", "execution_activity": None,
+                       "execution_cause": cause}), d["id"]),
             )
             conn.execute(
                 """INSERT INTO messages (thread, author, kind, body, artifact)
                    VALUES (%s, 'magi', 'consulta', %s, NULL)""",
-                (d["thread"], f"EJECUCIÓN FALLIDA — {detail}. Escribí 'seguí' para reintentar o abortá la decisión."),
+                (d["thread"], body),
             )
 
 
@@ -1568,66 +1606,65 @@ def _execute_plan(d: dict, cwd: str) -> None:
         log.info("ejecutando plan de %s en %s (%s) -> %s",
                  d["thread"], cwd, seat["seat"], out_path.name)
         event("trigger_spawned", pid=None, round=d.get("round"), **meta)
-        timed_out = False
-        with tempfile.TemporaryDirectory(prefix="magi-executor-") as tmp, \
-                out_path.open("w", encoding="utf-8") as f:
-            _prune_trigger_logs(f"execute_{d['thread']}_")
-            pin = Path(tmp) / "prompt.txt"
-            pin.write_text(prompt, encoding="utf-8")
-            execution_args = [
-                str(arg).replace("{git_common_dir}", production.common_dir(run["repo"]))
-                for arg in seat.get("execution_args", [])
-            ]
-            command = [seat["bin"], *seat.get("args", []), *execution_args]
-            transport = seat.get("prompt_transport", "stdin")
-            if transport == "file":
-                command.append(f"Read the UTF-8 task file at {pin} and follow every instruction in it.")
-            elif transport == "argument":
-                command.append(prompt)
-            elif transport != "stdin-only":
-                command.append("-")
-            with pin.open("rb") as fin:
-                proc = subprocess.Popen(
-                    command, cwd=cwd, stdin=fin, stdout=f, stderr=subprocess.STDOUT,
-                    **({"start_new_session": True} if os.name == "posix" else {}),
-                )
-                with _procs_lock:
-                    _procs[meta["token"]] = proc
-                activity = {
-                    "seat": seat["seat"], "started_at": now_iso(), "pid": proc.pid,
-                    "turn": "execute", "log": out_path.name,
-                }
-                with connect() as conn:
-                    conn.execute(
-                        "UPDATE decisions SET minority_report = minority_report || %s::jsonb WHERE id = %s",
-                        (Json({"execution_activity": activity}), d["id"]),
-                    )
-                event("trigger_pid", pid=proc.pid, **meta)
-                try:
-                    rc = proc.wait(timeout=seat.get("exec_timeout_secs", EJECUTOR_TIMEOUT_SECS))
-                except subprocess.TimeoutExpired:
-                    timed_out = True
-                    _kill_tree(proc)
-                    rc = proc.wait()
-                finally:
-                    with _procs_lock:
-                        _procs.pop(meta["token"], None)
+        # Directorio estable por decisión, no un tempdir: en Windows la
+        # limpieza del tempdir fallaba con WinError 32 mientras codex todavía
+        # tenía el archivo del prompt abierto, y esa excepción marcaba como
+        # FALLIDA una ejecución que había terminado bien (#28, dos veces).
+        exec_dir = LOG_DIR / "executor" / d["thread"]
+        exec_dir.mkdir(parents=True, exist_ok=True)
+        pin = exec_dir / "prompt.txt"
+        pin.write_text(prompt, encoding="utf-8")
+        execution_args = [
+            str(arg).replace("{git_common_dir}", production.common_dir(run["repo"]))
+            for arg in seat.get("execution_args", [])
+        ]
+        command = [seat["bin"], *seat.get("args", []), *execution_args]
+        transport = seat.get("prompt_transport", "stdin")
+        if transport == "file":
+            command.append(f"Read the UTF-8 task file at {pin} and follow every instruction in it.")
+        elif transport == "argument":
+            command.append(prompt)
+        elif transport != "stdin-only":
+            command.append("-")
+        timeout = seat.get("exec_timeout_secs", EJECUTOR_TIMEOUT_SECS)
+        _prune_trigger_logs(f"execute_{d['thread']}_")
+        with out_path.open("w", encoding="utf-8") as f:
+            rc, timed_out, elapsed = _spawn_executor(command, cwd, pin, f, seat, d, meta, timeout)
+            # Un proceso que muere en segundos sin escribir nada es un crash
+            # de arranque (mismo criterio que las cabezas): se reintenta UNA vez.
+            if rc != 0 and not timed_out and elapsed < FAST_CRASH_SECS and out_path.stat().st_size == 0:
+                log.warning("el ejecutor murió al arrancar (rc=%s en %.1fs); reintento en %ss",
+                            rc, elapsed, FAST_CRASH_RETRY_DELAY)
+                event("trigger_fast_crash", rc=rc, duration_s=round(elapsed, 1), **meta)
+                time.sleep(FAST_CRASH_RETRY_DELAY)
+                rc, timed_out, elapsed = _spawn_executor(command, cwd, pin, f, seat, d, meta, timeout)
         if timed_out or rc != 0:
+            cause = "timeout" if timed_out else ("crash" if out_path.stat().st_size == 0 else "error")
             detalle = "colgado y matado" if timed_out else f"rc={rc}"
-            _execution_failed(d, f"el ejecutor ({seat['seat']}) salió {detalle}. Log: {out_path.name}")
-            event("trigger_done", rc=rc, timed_out=timed_out,
+            _execution_failed(d, f"el ejecutor ({seat['seat']}) salió {detalle}. Log: {out_path.name}",
+                              cause=cause, log_path=out_path)
+            event("trigger_done", rc=rc, timed_out=timed_out, error=cause,
                   duration_s=round(time.monotonic() - start, 1), **meta)
             return
         # El modelo sólo necesita escribir el worktree. El relay posee el índice
         # Git y registra el resultado, igual para cualquier proveedor ejecutor.
-        production.commit_execution(run, f"MAGI: ejecución del plan #{d['id']}")
+        try:
+            production.commit_execution(run, f"MAGI: ejecución del plan #{d['id']}")
+            reviewed_sha, diff = production.review_target(run)
+        except RuntimeError as exc:
+            text = str(exc)
+            cause = ("sin_cambios" if "sin producir cambios" in text
+                     else "sin_commit" if "sin commit" in text or "ignorados" in text else "entorno")
+            _execution_failed(d, f"{text}. Log: {out_path.name}", cause=cause, log_path=out_path)
+            event("trigger_done", rc=1, timed_out=False, error=cause,
+                  duration_s=round(time.monotonic() - start, 1), **meta)
+            return
         # exito: diff de la rama y decision de revision con el diff en el journal
-        reviewed_sha, diff = production.review_target(run)
         if not diff:
             detail = (f"el ejecutor ({seat['seat']}) terminó sin producir cambios. "
                       f"Log: {out_path.name}")
-            _execution_failed(d, detail)
-            event("trigger_done", rc=1, timed_out=False, error="sin cambios",
+            _execution_failed(d, detail, cause="sin_cambios", log_path=out_path)
+            event("trigger_done", rc=1, timed_out=False, error="sin_cambios",
                   duration_s=round(time.monotonic() - start, 1), **meta)
             return
         diff = diff[:DIFF_CHARS]
@@ -1689,9 +1726,43 @@ def _execute_plan(d: dict, cwd: str) -> None:
               duration_s=round(time.monotonic() - start, 1), **meta)
     except Exception as exc:
         log.error("ejecución de %s falló: %s", d["thread"], exc)
-        _execution_failed(d, str(exc))
+        _execution_failed(d, str(exc), cause="entorno")
         event("trigger_done", rc=1, error=str(exc),
               duration_s=round(time.monotonic() - start, 1), **meta)
+
+
+def _spawn_executor(command, cwd, pin, f, seat, d, meta, timeout):
+    """Lanza el ejecutor y espera; devuelve (rc, timed_out, segundos)."""
+    started = time.monotonic()
+    timed_out = False
+    with pin.open("rb") as fin:
+        proc = subprocess.Popen(
+            command, cwd=cwd, stdin=fin, stdout=f, stderr=subprocess.STDOUT,
+            **({"start_new_session": True} if os.name == "posix" else {}),
+        )
+        with _procs_lock:
+            _procs[meta["token"]] = proc
+        activity = {
+            "seat": seat["seat"], "started_at": now_iso(), "pid": proc.pid,
+            "turn": "execute", "log": Path(f.name).name,
+        }
+        with connect() as conn:
+            conn.execute(
+                "UPDATE decisions SET minority_report = minority_report || %s::jsonb WHERE id = %s",
+                (Json({"execution_activity": activity}), d["id"]),
+            )
+        event("trigger_pid", pid=proc.pid, **meta)
+        try:
+            rc = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            _kill_tree(proc)
+            rc = proc.wait()
+        finally:
+            with _procs_lock:
+                _procs.pop(meta["token"], None)
+    f.flush()
+    return rc, timed_out, time.monotonic() - started
 
 
 def _run_executor_turn(d: dict, cwd: str) -> None:
@@ -1785,6 +1856,18 @@ def _maybe_merge_reviews(conn) -> None:
             log.exception("no se pudo procesar la revisión de #%s", candidate["id"])
 
 
+def _review_approves(rev: dict, override: dict | None) -> bool:
+    """Unanimidad, o mayoría 2/3 cuando el operador lo autorizó explícitamente
+    (board.merge_by_majority) para ESA revisión. Nunca con ruling distinto de
+    yes ni con una revisión abortada."""
+    if rev["ruling"] != "yes" or (rev.get("minority_report") or {}).get("aborted"):
+        return False
+    if rev["confidence"] == decision.CONFIDENCE_UNANIMOUS:
+        return True
+    return bool(override and override.get("review_id") == rev["id"]
+                and (rev["confidence"] or 0) >= decision.CONFIDENCE_MAJORITY)
+
+
 def _merge_candidate(conn, candidate: dict) -> None:
     run = candidate["minority_report"]["execution"]
     key = os.path.normcase(production.common_dir(run["repo"]))
@@ -1804,16 +1887,16 @@ def _merge_candidate(conn, candidate: dict) -> None:
         rev = conn.execute("SELECT * FROM decisions WHERE id = %s FOR UPDATE", (run["review_id"],)).fetchone()
         if not rev or rev["status"] != "closed":
             return
-        approved = (rev["ruling"] == "yes"
-                    and rev["confidence"] == decision.CONFIDENCE_UNANIMOUS
-                    and not (rev.get("minority_report") or {}).get("aborted"))
+        override = mr.get("merge_override")
+        approved = _review_approves(rev, override)
         state = "merge_blocked"
         if approved:
             try:
                 merged = production.merge_reviewed(run, f"MAGI: plan #{orig['id']}, revisión #{rev['id']}")
                 run["merge_sha"] = merged
                 state = "merged"
-                body = f"MERGE OK — commit revisado {run['reviewed_sha']} integrado como {merged}."
+                who = " (2/3, autorizado por el operador)" if override else ""
+                body = f"MERGE OK{who} — commit revisado {run['reviewed_sha']} integrado como {merged}."
             except (RuntimeError, OSError, subprocess.TimeoutExpired) as exc:
                 body = f"MERGE DETENIDO — {exc}. Se conserva el worktree; resolvé el estado del repo o abrí un plan nuevo."
         else:

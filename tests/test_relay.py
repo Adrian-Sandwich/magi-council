@@ -80,7 +80,14 @@ class FakeConn:
             rows = [p for p in self.positions if p["decision_id"] in ids]
         elif q.startswith("UPDATE decisions SET minority_report"):
             # fuentes de memoria de la ronda (_registrar_fuentes_de_memoria)
+            # y estado de ejecución (_execute_plan)
             self.updates = getattr(self, "updates", []) + [params]
+            rows = []
+        elif q.startswith("SELECT status FROM decisions"):
+            # publicación de la revisión: la decisión sigue ejecutando
+            rows = [{"status": "executing"}]
+        elif q.startswith("INSERT INTO messages"):
+            self.inserted = getattr(self, "inserted", []) + [params]
             rows = []
         else:
             raise AssertionError(f"query inesperada: {q}")
@@ -962,7 +969,7 @@ def test_ejecutor_con_binario_ausente_falla_rapido(monkeypatch, tmp_path):
                         lambda *a, **kw: plan_llamado.append(a))
     fallos = []
     monkeypatch.setattr(relay, "_execution_failed",
-                        lambda d, detail: fallos.append(detail))
+                        lambda d, detail, **kw: fallos.append(detail))
 
     relay._execute_plan({"id": 7, "thread": "d7", "title": "plan X"}, str(tmp_path))
 
@@ -1182,7 +1189,9 @@ def _fake_popen(outcomes):
 
     def popen(command, cwd=None, stdin=None, stdout=None, stderr=None, **kw):
         rc, output = outcomes.pop(0)
-        stdout.write(output)
+        # el relay abre el log en binario (turnos) o en texto (ejecutor)
+        stdout.write(output if "b" in getattr(stdout, "mode", "wb") else output.decode("utf-8"))
+        stdout.flush()
         calls.append(command)
         return _FakeProc(rc, output)
     return popen, calls
@@ -1299,3 +1308,86 @@ def test_las_posiciones_de_rondas_anteriores_se_resumen_en_el_journal_de_la_cabe
     for journal in (relay._journal_inline(NoPositions(), "d-42"),
                     relay._journal_inline(NoPositions(), "d-42", decision={"id": 42, "round": 1})):
         assert journal[0]["body"].startswith("ARGUMENTO-VIEJO") and "ronda anterior" not in journal[0]["body"]
+
+
+# ------------------------------------------------- ejecutor: causas y reintento
+
+def _executor_env(monkeypatch, tmp_path, outcomes):
+    """Ejecutor de mentira: cada Popen consume (rc, salida) de `outcomes`."""
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setattr(heads, "load", lambda: [
+        {"seat": "ejec", "name": "x", "type": "cli", "executor": True, "bin": sys.executable, "args": []}])
+    monkeypatch.setattr(relay.production, "plan",
+                        lambda cwd, did, prev: {"branch": "magi/d9", "base_branch": "main", "base_sha": "base0",
+                                                "repo": str(tmp_path), "worktree": str(tmp_path)})
+    monkeypatch.setattr(relay.production, "prepare", lambda run: str(tmp_path))
+    monkeypatch.setattr(relay.production, "common_dir", lambda repo: str(tmp_path))
+    monkeypatch.setattr(relay.production, "commit_execution", lambda run, message: "sha1")
+    monkeypatch.setattr(relay.production, "review_target", lambda run: ("sha1", "diff"))
+    monkeypatch.setattr(relay.time, "sleep", lambda s: None)
+    popen, calls = _fake_popen(outcomes)
+    monkeypatch.setattr(relay.subprocess, "Popen", popen)
+    fallos = []
+    monkeypatch.setattr(relay, "_execution_failed", lambda d, detail, **kw: fallos.append((detail, kw)))
+    monkeypatch.setattr(relay, "connect", lambda: FakeConn([]))
+    return calls, fallos
+
+
+def test_ejecutor_que_muere_al_arrancar_se_reintenta_y_no_usa_tempdir(monkeypatch, tmp_path):
+    """#28: dos ejecuciones marcadas FALLIDAS por WinError 32 al borrar el
+    tempdir del prompt con codex todavía dentro, y una por rc=-1 sin salida.
+    El prompt vive en logs/executor/<thread>/ (sin limpieza que falle) y un
+    crash de arranque se reintenta una vez."""
+    calls, fallos = _executor_env(monkeypatch, tmp_path, [(1, b""), (0, b"hecho")])
+    monkeypatch.setattr(relay.board, "start_decision", lambda *a, **kw: {"decision_id": 77, "thread": "d77"})
+    relay._execute_plan({"id": 9, "thread": "d9", "title": "plan", "minority_report": None}, str(tmp_path))
+    assert len(calls) == 2 and fallos == []
+    assert (tmp_path / "executor" / "d9" / "prompt.txt").exists()
+    events = [json.loads(l)["event"] for l in (tmp_path / "events.jsonl").read_text().splitlines()]
+    assert "trigger_fast_crash" in events
+
+
+def test_fallo_del_ejecutor_lleva_causa_y_cola_del_log(monkeypatch, tmp_path):
+    calls, fallos = _executor_env(monkeypatch, tmp_path, [(2, b"linea 1\nerror: sin permisos\n")])
+    relay._execute_plan({"id": 9, "thread": "d9", "title": "plan", "minority_report": None}, str(tmp_path))
+    assert len(calls) == 1, "con salida no es crash de arranque: no se reintenta"
+    detail, kw = fallos[0]
+    assert kw["cause"] == "error" and "rc=2" in detail
+    assert relay._log_tail(kw["log_path"]).endswith("error: sin permisos")
+
+
+def test_fallo_de_commit_se_clasifica_sin_commit(monkeypatch, tmp_path):
+    calls, fallos = _executor_env(monkeypatch, tmp_path, [(0, b"ok")])
+
+    def boom(run, message):
+        raise RuntimeError("los cambios del ejecutor están ignorados y no pueden revisarse")
+    monkeypatch.setattr(relay.production, "commit_execution", boom)
+    relay._execute_plan({"id": 9, "thread": "d9", "title": "plan", "minority_report": None}, str(tmp_path))
+    assert fallos[0][1]["cause"] == "sin_commit"
+
+
+def test_execution_failed_escribe_causa_y_cola_en_el_journal(monkeypatch, tmp_path):
+    written = []
+
+    class Conn(FakeConn):
+        def execute(self, query, params=()):
+            written.append((" ".join(query.split()), params))
+            return _Result([])
+    monkeypatch.setattr(relay, "connect", lambda: Conn([]))
+    log_file = tmp_path / "execute.log"
+    log_file.write_text("\n".join(f"linea {i}" for i in range(100)) + "\nTraceback: boom", encoding="utf-8")
+    relay._execution_failed({"id": 9, "thread": "d9"}, "salió rc=1", cause="crash", log_path=log_file)
+    update, insert = written
+    assert update[1][0].obj["execution_cause"] == "crash" and update[1][0].obj["execution_state"] == "failed"
+    body = insert[1][1]
+    assert body.startswith("EJECUCIÓN FALLIDA [crash]") and "Traceback: boom" in body and "linea 0" not in body
+
+
+def test_review_approves_unanime_o_mayoria_autorizada():
+    rev = {"id": 30, "ruling": "yes", "confidence": relay.decision.CONFIDENCE_MAJORITY, "minority_report": {}}
+    assert not relay._review_approves(rev, None)
+    assert relay._review_approves(rev, {"review_id": 30, "by": "adrian"})
+    assert not relay._review_approves(rev, {"review_id": 29, "by": "adrian"}), "la autorización es por revisión"
+    assert relay._review_approves(dict(rev, confidence=1.0), None)
+    assert not relay._review_approves(dict(rev, ruling="no", confidence=1.0), {"review_id": 30})
+    assert not relay._review_approves(dict(rev, confidence=1.0, minority_report={"aborted": True}), None)

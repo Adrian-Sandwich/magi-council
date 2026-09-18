@@ -278,7 +278,13 @@ repository or the configured default repository becomes the isolated worktree:
    local commit identity for the integration commit; it does not require or
    modify your global Git identity. 2/3 majority,
    rejection or later changes → **MERGE PENDING**, with the reason in the
-   journal.
+   journal. When the review approved with 2 of 3, the UI offers **Mergear
+   con 2/3**: your explicit authorization is recorded as arbitration in the
+   journal and the relay then integrates with the same checks as a unanimous
+   merge. An executor failure records its cause (`timeout`, `crash`,
+   `error`, `sin_cambios`, `sin_commit`, `entorno`) and the last lines of
+   the executor's log in the journal; a process that dies within seconds of
+   starting with no output is retried once.
 
 When a review closes `conditional`, approving that review does not execute the
 review as a new plan and does not reopen it for another debate round. Its

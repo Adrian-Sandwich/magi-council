@@ -105,7 +105,8 @@ def test_executor_spawn_error_is_persisted_for_manual_retry(monkeypatch):
     monkeypatch.setattr(relay, "event", lambda *a, **kw: None)
     relay._run_executor_turn({"id": 1, "thread": "d1"}, "/unused")
     calls = conn.execute.call_args_list
-    assert any('"execution_state": "failed"' in c.args[0] for c in calls)
+    assert any(len(c.args) > 1 and c.args[1] and getattr(c.args[1][0], "obj", {}).get("execution_state") == "failed"
+               for c in calls)
     assert any("EJECUCIÓN FALLIDA" in str(c.args) for c in calls)
 
 
