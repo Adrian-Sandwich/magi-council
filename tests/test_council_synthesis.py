@@ -10,6 +10,12 @@ DRAFT = {'answer': 'Probar primero, conservando los datos.', 'agreements': ['Con
          'differences': ['El plazo sigue en discusión'], 'open_questions': []}
 
 
+def test_parser_bounds_verbose_but_valid_editor_lists():
+    verbose = dict(DRAFT, agreements=[f"punto {i}" for i in range(6)])
+    parsed = synthesis.parse(json.dumps(verbose))
+    assert parsed["agreements"] == verbose["agreements"][:5]
+
+
 def test_three_reviews_required_and_disagreement_preserved():
     calls = []
     def invoke(seat, prompt):

@@ -36,7 +36,7 @@ def parse(text, review=False):
                 candidates.append({'approve': value['approve'], 'feedback': value['feedback'][:1200],
                                    'accept_answer': value.get('accept_answer') if type(value.get('accept_answer')) is bool else None})
         elif (isinstance(value.get('answer'), str) and 1 <= len(value['answer'].strip()) <= 2400
-              and all(isinstance(value.get(k), list) and len(value[k]) <= 5
+              and all(isinstance(value.get(k), list) and len(value[k]) <= 8
                       and all(isinstance(x, str) and len(x) <= 500 for x in value[k])
                       for k in ('agreements', 'differences', 'open_questions'))):
             extra = {}
@@ -49,7 +49,8 @@ def parse(text, review=False):
                 extra[key] = items
             else:
                 candidates.append({
-                    **{k: value[k] for k in ('answer', 'agreements', 'differences', 'open_questions')},
+                    'answer': value['answer'],
+                    **{k: value[k][:5] for k in ('agreements', 'differences', 'open_questions')},
                     **extra,
                 })
     if not candidates:
@@ -82,6 +83,7 @@ def compose(bundle, seats, invoke, progress=lambda result: None):
                    'blocking_conditions contiene únicamente cambios verificables que el ejecutor debe hacer '
                    'dentro del repositorio. Permisos/capacidades de la sesión, preguntas al operador y frases '
                    'sobre lo que queda fuera del alcance no son condiciones: ponelas en open_questions o deferred_items. '
+                   'Usá como máximo 5 elementos en agreements, differences y open_questions. '
                    'Devolvé sólo JSON: {"answer":"...","agreements":[],"differences":[],"open_questions":[], '
                    '"blocking_conditions":[],"deferred_items":[]}.')
         if feedback:
