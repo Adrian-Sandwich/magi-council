@@ -568,17 +568,36 @@ def _limpiar_fallos_de_disparo(state: dict, thread: str) -> None:
 
 # ---------------------------------------------------------------- disparo API
 
-def _journal_inline(conn, thread: str) -> list[dict]:
+def _digest_position(body: str) -> str:
+    """Cabeza + cola de una posición de una ronda anterior: el tag POSITION y
+    las CONDITIONS están al final o al principio, y la conclusión al final."""
+    head, tail = apihead.POSITION_DIGEST_HEAD, apihead.POSITION_DIGEST_TAIL
+    if len(body) <= head + tail + 60:
+        return body
+    return body[:head] + "\n[… posición de una ronda anterior, acotada …]\n" + body[-tail:]
+
+
+def _journal_inline(conn, thread: str, decision: dict | None = None) -> list[dict]:
     """Los últimos JOURNAL_LIMIT mensajes del thread, en orden cronológico.
     Mismo corte para turnos de decisión y de chat, de asientos API e
-    inline: el prompt siempre ve la cola del journal."""
+    inline: el prompt siempre ve la cola del journal. Con `decision`, las
+    posiciones de rondas anteriores a la actual se resumen (cabeza + cola):
+    el voto y las condiciones se conservan; el argumento largo no."""
     rows = conn.execute(
         """
-        SELECT author, kind, body FROM messages
+        SELECT id, author, kind, body FROM messages
         WHERE thread = %s ORDER BY id DESC LIMIT %s
         """,
         (thread, apihead.JOURNAL_LIMIT),
     ).fetchall()
+    older_positions: set = set()
+    if decision is not None and decision.get("round", 1) > 1:
+        older_positions = {
+            r["message_id"] for r in conn.execute(
+                "SELECT message_id, round FROM positions WHERE decision_id = %s AND round < %s",
+                (decision["id"], decision["round"]),
+            ).fetchall() if r.get("message_id") is not None
+        }
     # JOURNAL_LIMIT evita una cantidad ilimitada de mensajes, pero las salidas
     # de agentes con herramientas pueden medir decenas de KB cada una. Acotar
     # también caracteres evita derribar CLIs nativos en rondas tardías. Se
@@ -591,6 +610,9 @@ def _journal_inline(conn, thread: str) -> list[dict]:
     for raw in rows:  # DESC: newest evidence wins
         item = dict(raw)
         body = item.get("body") or ""
+        if item.get("id") in older_positions and item.get("kind") == "posicion":
+            body = _digest_position(body)
+        item.pop("id", None)
         if len(body) > message_limit:
             body = body[:message_limit] + "\n[... mensaje acotado ...]"
         if len(body) > remaining:
@@ -634,7 +656,7 @@ def _run_decision_turn(seat_info: dict, d: dict, producir_voto, turn: str, stats
     }
     try:
         with connect() as conn:
-            journal = _journal_inline(conn, d["thread"])
+            journal = _journal_inline(conn, d["thread"], decision=d)
         vote = producir_voto(journal)
         meta.update(stats)
         with connect() as conn:

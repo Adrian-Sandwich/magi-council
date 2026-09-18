@@ -33,6 +33,12 @@ JOURNAL_LIMIT = 15        # mensajes del journal que entran al prompt
 JOURNAL_CHAR_LIMIT = 18_000
 JOURNAL_MESSAGE_CHAR_LIMIT = 6_000
 BODY_CHARS = 2000         # tope por mensaje inlineado
+# Posiciones de rondas ANTERIORES en el journal de una cabeza: se resumen a
+# cabeza + cola (el voto y las condiciones sobreviven; la argumentación larga
+# no). Tres posiciones de 6k chars costaban ~4.5k tokens por cabeza en cada
+# ronda 2+; con esto quedan en ~1k.
+POSITION_DIGEST_HEAD = 900
+POSITION_DIGEST_TAIL = 400
 
 
 def parse_vote(text: str) -> dict:

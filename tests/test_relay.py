@@ -60,8 +60,10 @@ class FakeConn:
                 m for m in sorted(self.messages, key=lambda m: m["id"])
                 if m["thread"] == params[0] and m.get("artifact")
             ][:5]
-        elif q.startswith("SELECT author, kind, body"):
+        elif q.startswith("SELECT id, author, kind, body"):
             rows = []
+        elif q.startswith("SELECT message_id, round FROM positions"):
+            rows = [p for p in self.positions if p.get("message_id") is not None]
         elif q.startswith("SELECT id, title, artifact") and "'open'" in q:
             rows = [d for d in self.decisions if d.get("status") == "open"]
         elif q.startswith("SELECT id, title, artifact"):
@@ -1092,8 +1094,8 @@ def test_chat_libre_acota_la_memoria_al_repo_y_al_thread(fired, monkeypatch):
     class _JournalConn(FakeConn):
         def execute(self, query, params=()):
             q = " ".join(query.split())
-            if q.startswith("SELECT author, kind, body"):
-                return _Result([{"author": "adrian", "kind": "analisis", "body": "¿Qué pasa con auth?"}])
+            if q.startswith("SELECT id, author, kind, body"):
+                return _Result([{"id": 1, "author": "adrian", "kind": "analisis", "body": "¿Qué pasa con auth?"}])
             return super().execute(query, params)
 
     seen = []
@@ -1257,3 +1259,43 @@ def test_el_turno_inline_registra_tamano_de_prompt_salida_y_memoria(monkeypatch,
             if '"trigger_done"' in l][-1]
     assert done["memory_chars"] == 300 and done["output_chars"] == 514
     assert done["prompt_chars"] > 300 and done["rc"] == 0
+
+
+def test_las_posiciones_de_rondas_anteriores_se_resumen_en_el_journal_de_la_cabeza():
+    """En ronda 2+ cada cabeza releía tres posiciones de hasta 6k chars
+    (~4.5k tokens). Se resumen a cabeza + cola: el voto y las condiciones
+    sobreviven, la argumentación larga no. Las de la ronda actual y los
+    mensajes humanos no se tocan."""
+    long_old = "ARGUMENTO-VIEJO " * 400 + "\nPOSITION: conditional\nCONDITIONS: probar antes"
+    messages = [
+        {"id": 10, "author": "melchior", "kind": "posicion", "body": long_old},
+        {"id": 11, "author": "adrian", "kind": "contexto", "body": "sigan con esto " * 300},
+        {"id": 12, "author": "casper", "kind": "posicion", "body": "ARGUMENTO-ACTUAL " * 300},
+    ]
+
+    class Conn:
+        def execute(self, query, params=()):
+            q = " ".join(query.split())
+            if q.startswith("SELECT id, author, kind, body"):
+                return _Result(list(reversed(messages)))
+            if q.startswith("SELECT message_id, round FROM positions"):
+                assert params == (42, 2)
+                return _Result([{"message_id": 10, "round": 1}])
+            raise AssertionError(q)
+
+    journal = relay._journal_inline(Conn(), "d-42", decision={"id": 42, "round": 2})
+    old, human, current = journal
+    assert "posición de una ronda anterior, acotada" in old["body"]
+    assert old["body"].endswith("CONDITIONS: probar antes") and old["body"].startswith("ARGUMENTO-VIEJO")
+    assert len(old["body"]) <= relay.apihead.POSITION_DIGEST_HEAD + relay.apihead.POSITION_DIGEST_TAIL + 60
+    assert human["body"] == messages[1]["body"], "los mensajes humanos no se resumen"
+    assert current["body"].startswith("ARGUMENTO-ACTUAL") and "acotada" not in current["body"]
+    assert "id" not in old, "el prompt no lleva ids de mensajes"
+    # sin decisión (chat) o en ronda 1 no se consulta nada
+    class NoPositions(Conn):
+        def execute(self, query, params=()):
+            assert "positions" not in query
+            return super().execute(query, params)
+    for journal in (relay._journal_inline(NoPositions(), "d-42"),
+                    relay._journal_inline(NoPositions(), "d-42", decision={"id": 42, "round": 1})):
+        assert journal[0]["body"].startswith("ARGUMENTO-VIEJO") and "ronda anterior" not in journal[0]["body"]
