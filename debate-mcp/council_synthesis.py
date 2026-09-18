@@ -28,7 +28,9 @@ LIST_MAX_ITEMS = 3
 CONDITIONS_MAX_ITEMS = 5
 STYLE_FIXES = 1  # pasadas de corrección de estilo antes de la revisión de fidelidad
 _FIRST_PERSON = re.compile(r"\b(mi eje|desde mi|mi sesgo|mi voto|yo (?:creo|pienso|sostengo|voto)|nos la bancamos|me parece)\b", re.IGNORECASE)
-_META = re.compile(r"\b(journal|registro|log\b|decisi[oó]n #\d+|duplicad|reapertura|las fuentes registran|el consejo cerr[oó])", re.IGNORECASE)
+# «registro» a secas no: «registros del sistema» (logs de un servidor) es
+# contenido legítimo de una respuesta sobre seguridad.
+_META = re.compile(r"\b(journal|(?:el|del|en el) registro\b(?! del sistema)|\blog\b|decisi[oó]n #\d+|duplicad|reapertura|las fuentes registran|el consejo cerr[oó])", re.IGNORECASE)
 _JARGON = re.compile(r"\b(observer-relative|trade-?off|stakeholder|mindset|feedback loop|edge case)\b", re.IGNORECASE)
 
 
@@ -149,21 +151,27 @@ def _is_conceptual(bundle):
 POLISH = True
 
 
-def polish(draft, writer, invoke, question='', conceptual=False):
+def polish(draft, writer, invoke, question='', conceptual=False, issues=()):
     """Reescribe el borrador en español claro sin cambiar su contenido.
-    Devuelve el borrador pulido, o el original si el corrector falla."""
+    Devuelve el borrador pulido, o el original si el corrector falla.
+    `issues` son reglas que la pasada anterior dejó rotas (segunda pasada)."""
+    limit = min(ANSWER_MAX_WORDS, max(80, int(len((draft.get('answer') or '').split()) * 1.15)))
     prompt = (
         'Sos corrector de estilo del consejo MAGI. Reescribí el texto siguiente para que lo entienda '
         'una persona atenta que no es especialista en el tema, respondiendo a la pregunta: '
         f'«{question}».\n'
         'Reglas: conservá TODO el contenido — ni agregues, ni quites, ni reinterpretes; cada oración '
         'del original tiene que tener su equivalente. Mantené números, nombres y salvedades. '
+        f'La respuesta no puede superar las {limit} palabras: aclarar no es alargar. '
         'Escribí en el idioma de la pregunta (traducí si hace falta). Oraciones completas, cortas y '
         'encadenadas, en voz activa; nada de fragmentos separados por dos puntos ni punto y coma. '
-        'Explicá entre paréntesis, en seis palabras o menos, cada sigla o término técnico la primera '
-        'vez, salvo los que ya aparecen en la pregunta. Sin anglicismos, sin «las fuentes», sin '
-        'primera persona. Las listas (agreements, differences, open_questions) son una frase clara '
-        'cada una. No uses herramientas.\n'
+        'Explicá entre paréntesis, en seis palabras o menos, sólo las SIGLAS y nombres de técnicas '
+        'la primera vez (OAEP, CRT, PKCS…), nunca palabras corrientes como bits, biblioteca, '
+        'clave o cuántico, y ninguna que ya aparezca en la pregunta. Sin anglicismos, sin «las '
+        'fuentes», sin primera persona. Las listas (agreements, differences, open_questions) son '
+        'una sola frase clara de hasta 30 palabras cada una. No uses herramientas.\n'
+        + ('Además, la versión anterior rompía estas reglas; corregilas: ' + json.dumps(list(issues), ensure_ascii=False) + '\n'
+           if issues else '') +
         'Devolvé sólo JSON con las mismas claves y el mismo número de elementos por lista: '
         '{"answer":"...","agreements":[],"differences":[],"open_questions":[],'
         '"blocking_conditions":[],"deferred_items":[],"next_move":null}.\n'
@@ -273,6 +281,12 @@ def compose(bundle, seats, invoke, progress=lambda result: None):
         if POLISH:
             progress(dict(draft, status='generating', phase='polishing', cycle=cycle, current_head=writer['seat']))
             draft = polish(draft, writer, invoke, bundle.get('question', ''), conceptual)
+            # El corrector tiende a alargar (una respuesta de 150 pasó a 244
+            # palabras explicando «bits»): si dejó reglas rotas, una segunda
+            # pasada con esas reglas señaladas; si insiste, se queda así.
+            remaining = style_issues(draft, conceptual, bundle.get('question', ''))
+            if remaining and draft.get('polished'):
+                draft = polish(draft, writer, invoke, bundle.get('question', ''), conceptual, issues=remaining)
         draft['style_issues'] = style_issues(draft, conceptual, bundle.get('question', ''))
         progress(dict(draft, status='generating', phase='reviewing', cycle=cycle,
                       current_head='all heads', reviews=[]))

@@ -275,3 +275,28 @@ def test_compose_pule_cada_borrador_antes_de_revisarlo():
     result = synthesis.compose(BUNDLE, SEATS, invoke, progress=lambda r: phases.append(r.get('phase')))
     assert result['answer'] == 'Pulido.' and result['polished'] is True
     assert phases == ['drafting', 'polishing', 'reviewing']
+
+
+def test_el_corrector_hace_una_segunda_pasada_si_alargo_o_rompio_reglas():
+    """La primera versión pulida de #34 pasó de 150 a 244 palabras explicando
+    «bits» y «biblioteca»; una segunda pasada con las reglas rotas la trae de
+    vuelta. Si vuelve a fallar, se queda: legible pero larga es mejor que
+    telegráfica."""
+    long_answer = 'Explicación ' * 200
+    calls = []
+
+    def invoke(seat, prompt):
+        calls.append(prompt)
+        if 'corrector de estilo' in prompt and 'rompía estas reglas' in prompt:
+            return json.dumps(dict(DRAFT, answer='Corta y clara.'))
+        if 'corrector de estilo' in prompt:
+            return json.dumps(dict(DRAFT, answer=long_answer))
+        if 'Redactá una respuesta' in prompt:
+            return json.dumps(DRAFT)
+        return json.dumps({'approve': True, 'feedback': ''})
+    result = synthesis.compose(BUNDLE, SEATS, invoke)
+    assert result['answer'] == 'Corta y clara.' and result['style_issues'] == []
+    assert sum('corrector de estilo' in p for p in calls) == 2
+    assert 'no puede superar las' in calls[1]
+    assert synthesis.style_issues({'answer': 'La clave queda copiada en registros del sistema.',
+                                   'agreements': [], 'differences': [], 'open_questions': []}, True) == []
