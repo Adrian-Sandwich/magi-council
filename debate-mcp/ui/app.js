@@ -408,6 +408,53 @@ function renderSummary(d) {
   });
 }
 
+// ------------------------------------------------------------- memoria
+
+// Qué nodos del grafo vio el consejo en la ronda y la calificación humana
+// (¿sirvió?). Las etiquetas son el conjunto calificado a mano que la
+// evaluación de recuperación usa; nunca cambian votos ni reabren nada.
+function renderMemoryFeedback(d) {
+  const box = document.getElementById("memory-feedback");
+  const sources = d?.memory_sources?.ids || [];
+  box.hidden = !sources.length || uiMode !== "council";
+  if (box.hidden) { box.replaceChildren(); return; }
+  const feedback = d.memory_feedback;
+  const signature = JSON.stringify([d.id, sources, feedback?.id, sending]);
+  if (box.dataset.signature === signature) return;
+  box.dataset.signature = signature;
+  box.replaceChildren();
+  const label = document.createElement("span");
+  label.textContent = `Memoria consultada en la ronda ${d.memory_sources.round}: ${sources.length} fuente${sources.length === 1 ? "" : "s"}. ¿Sirvió?`;
+  const list = document.createElement("span");
+  list.className = "memory-sources";
+  list.textContent = sources.join(" · ");
+  const buttons = [["useful", true, "👍 Sirvió"], ["useless", false, "👎 No sirvió"]].map(([key, useful, text]) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = text;
+    button.setAttribute("aria-pressed", String(feedback ? feedback.useful === useful : false));
+    button.disabled = sending || !connected;
+    button.addEventListener("click", async () => {
+      const status = document.getElementById("c-status");
+      try {
+        await postJSON("/memory-feedback", {decision_id: d.id, useful});
+        status.textContent = useful ? "Gracias: esa memoria queda marcada como útil." : "Anotado: esa memoria no sirvió; la evaluación lo tendrá en cuenta.";
+      } catch (error) {
+        status.textContent = `No se pudo guardar la calificación: ${error.message}`;
+      }
+    });
+    return button;
+  });
+  box.append(label, ...buttons);
+  if (feedback) {
+    const state = document.createElement("span");
+    state.className = "memory-state";
+    state.textContent = `Calificada: ${feedback.useful ? "sirvió" : "no sirvió"}${feedback.note ? " — " + feedback.note : ""}`;
+    box.append(state);
+  }
+  box.append(list);
+}
+
 function renderConversation(d) {
   const el = document.getElementById("conversation");
   const input = document.getElementById("c-input");
@@ -611,6 +658,7 @@ function render() {
   renderMagi(d);
   renderStatusBar(d);
   renderSummary(d);
+  renderMemoryFeedback(d);
   renderOutcome(d);
   renderConversation(d);
   renderHistory();

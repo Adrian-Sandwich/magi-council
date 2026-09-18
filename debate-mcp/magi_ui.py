@@ -38,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import board  # noqa: E402
 import outcomes  # noqa: E402
 import turn_errors
+import memory_feedback
 
 from config import connect  # noqa: E402
 
@@ -144,7 +145,8 @@ def build_state(conn) -> dict:
         """
         SELECT id, title, artifact, protocol, status, ruling, confidence, round, thread, heads, minority_report, production,
                (SELECT COALESCE(max(id),0) FROM messages WHERE thread=decisions.thread) AS journal_version,
-               (SELECT to_jsonb(o) FROM decision_outcomes o WHERE decision_id=decisions.id ORDER BY o.id DESC LIMIT 1) AS outcome
+               (SELECT to_jsonb(o) FROM decision_outcomes o WHERE decision_id=decisions.id ORDER BY o.id DESC LIMIT 1) AS outcome,
+               (SELECT to_jsonb(f) FROM memory_feedback f WHERE decision_id=decisions.id ORDER BY f.id DESC LIMIT 1) AS memory_feedback
         FROM decisions WHERE status IN ('open', 'split', 'executing') ORDER BY id
         """
     ).fetchall()
@@ -152,7 +154,8 @@ def build_state(conn) -> dict:
         """
         SELECT id, title, artifact, protocol, status, ruling, confidence, round, thread, heads, minority_report, production,
                (SELECT COALESCE(max(id),0) FROM messages WHERE thread=decisions.thread) AS journal_version,
-               (SELECT to_jsonb(o) FROM decision_outcomes o WHERE decision_id=decisions.id ORDER BY o.id DESC LIMIT 1) AS outcome
+               (SELECT to_jsonb(o) FROM decision_outcomes o WHERE decision_id=decisions.id ORDER BY o.id DESC LIMIT 1) AS outcome,
+               (SELECT to_jsonb(f) FROM memory_feedback f WHERE decision_id=decisions.id ORDER BY f.id DESC LIMIT 1) AS memory_feedback
         FROM decisions WHERE status = 'closed' ORDER BY id DESC LIMIT %s
         """,
         (CLOSED_DECISIONS,),
@@ -246,6 +249,8 @@ def build_state(conn) -> dict:
             "turn_errors": errors,
             "synthesis": synthesis,
             "outcome": r.get('outcome'),
+            "memory_sources": mr.get("memory_sources"),
+            "memory_feedback": r.get("memory_feedback"),
             "seats": seats, "journal": journal,
         })
 
@@ -493,7 +498,7 @@ class Handler(BaseHTTPRequestHandler):
     # ---------------------------------------------------------- POST
 
     def do_POST(self) -> None:
-        if self.path not in ("/start", "/message", "/abort", "/outcome", "/retry-turns", "/continuation"):
+        if self.path not in ("/start", "/message", "/abort", "/outcome", "/retry-turns", "/continuation", "/memory-feedback"):
             self._send_json({"error": "not found"}, 404)
             return
 
@@ -538,6 +543,8 @@ class Handler(BaseHTTPRequestHandler):
             self._retry_turns(payload)
         elif self.path == "/outcome":
             self._outcome(payload)
+        elif self.path == "/memory-feedback":
+            self._memory_feedback(payload)
         elif self.path == "/continuation":
             self._continuation(payload)
         else:
@@ -560,6 +567,15 @@ class Handler(BaseHTTPRequestHandler):
             with connect() as conn:
                 with conn.transaction():
                     result = outcomes.record(conn, payload)
+            self._send_json(result, 201)
+        except ValueError as exc:
+            self._send_json({'error': str(exc)}, 400)
+
+    def _memory_feedback(self, payload):
+        try:
+            with connect() as conn:
+                with conn.transaction():
+                    result = memory_feedback.record(conn, payload)
             self._send_json(result, 201)
         except ValueError as exc:
             self._send_json({'error': str(exc)}, 400)

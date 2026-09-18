@@ -912,3 +912,31 @@ def test_broadcast_descarta_cliente_con_cola_llena(capfd):
         assert "descartado" in capfd.readouterr().err
     finally:
         _cliente_baja(q)
+
+
+def test_memory_feedback_endpoint(ui_server_conn, monkeypatch):
+    port, _, _ = ui_server_conn
+    calls = []
+
+    def record(db, payload):
+        calls.append(payload)
+        if payload.get("useful") is None:
+            raise ValueError("Indicá si la memoria sirvió o no")
+        return {"id": 3, "decision_id": payload["decision_id"], "useful": payload["useful"]}
+    monkeypatch.setattr(magi_ui.memory_feedback, "record", record)
+    resp = _post(port, "/memory-feedback", {"decision_id": 2, "useful": True})
+    assert resp.status == 201
+    assert json.loads(resp.read())["useful"] is True
+    resp = _post(port, "/memory-feedback", {"decision_id": 2})
+    assert resp.status == 400
+    assert calls == [{"decision_id": 2, "useful": True}, {"decision_id": 2}]
+
+
+def test_state_expone_fuentes_de_memoria_y_calificacion():
+    conn = FakeUiConn()
+    conn.decisions = [_decision(5, status="closed", ruling="yes",
+                                minority_report={"memory_sources": {"round": 1, "ids": ["decision:1"]}})]
+    conn.decisions[0]["memory_feedback"] = {"id": 4, "useful": False, "note": ""}
+    d = magi_ui.build_state(conn)["decisions"][0]
+    assert d["memory_sources"] == {"round": 1, "ids": ["decision:1"]}
+    assert d["memory_feedback"]["useful"] is False

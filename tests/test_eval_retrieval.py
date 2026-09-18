@@ -75,3 +75,20 @@ def test_evaluate_oculta_el_mensaje_reindexa_y_mide_recall(graph_db, tmp_path):
     # la base original no se tocó
     with closing(sqlite3.connect(path)) as conn:
         assert json.loads(conn.execute("SELECT props FROM nodes WHERE id='decision:1'").fetchone()[0])["evidence"]
+
+
+def test_summarize_labels_cuenta_utilidad_y_fuentes_rechazadas():
+    rows = [
+        {"decision_id": 1, "useful": True, "sources": ["decision:7", "doc:a"]},
+        {"decision_id": 2, "useful": False, "sources": ["decision:7", "doc:b"]},
+        {"decision_id": 2, "useful": False, "sources": ["decision:7"]},
+    ]
+    summary = eval_retrieval.summarize_labels(rows)
+    assert summary["labels"] == 3 and summary["useful"] == 1 and summary["decisions"] == 2
+    assert summary["useful_rate"] == 0.333
+    assert summary["most_rejected"] == [("decision:7", 2), ("doc:b", 1)]
+    assert eval_retrieval.summarize_labels([]) == {"labels": 0, "useful": 0, "useful_rate": None,
+                                                   "decisions": 0, "most_rejected": []}
+    assert "ninguna todavía" in eval_retrieval.render({"cases": 0, "same_repo": False, "results": [],
+        "lexical": {"recall@1": None, "recall@3": None}, "hybrid": {"recall@1": None, "recall@3": None},
+        "labels": summary | {"labels": 0}})

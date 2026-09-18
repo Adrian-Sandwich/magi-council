@@ -68,3 +68,12 @@ def test_memory_budget_and_missing_database(graph_db, monkeypatch, tmp_path):
     monkeypatch.setattr(memory_ctx, 'DB_PATH', tmp_path / 'missing.db')
     assert memory_ctx.memoria_para('Parser') == ''
     assert not memory_ctx.DB_PATH.exists()
+
+
+def test_memoria_con_fuentes_devuelve_los_ids_que_entraron(graph_db, monkeypatch):
+    from pathlib import Path
+    monkeypatch.setattr(memory_ctx, 'DB_PATH', Path(graph_db.execute('PRAGMA database_list').fetchone()[2]))
+    seed(graph_db, 'decision:5', 'Authentication timeout', objective='Fix login timeout')
+    text, ids = memory_ctx.memoria_con_fuentes('authentication timeout')
+    assert ids == ['decision:5'] and 'decision:5' in text
+    assert memory_ctx.memoria_con_fuentes('receta de pastel') == ('', [])

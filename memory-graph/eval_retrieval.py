@@ -124,6 +124,38 @@ def evaluate(cases: list[dict], source_db: Path, retrieve, reindex, same_repo: b
     }
 
 
+def summarize_labels(rows: list[dict]) -> dict:
+    """Etiquetas humanas (memory_feedback): cuántas hay, qué fracción marcó
+    la memoria como útil, y qué fuentes aparecen más en calificaciones
+    negativas. Son juicios del operador sobre el bloque completo que vio,
+    no una verdad por fuente: una fuente en un bloque "no sirvió" puede
+    haber sido la única útil."""
+    total = len(rows)
+    useful = sum(1 for r in rows if r.get("useful"))
+    negative: dict[str, int] = {}
+    for r in rows:
+        if r.get("useful"):
+            continue
+        for source in r.get("sources") or []:
+            negative[source] = negative.get(source, 0) + 1
+    return {
+        "labels": total,
+        "useful": useful,
+        "useful_rate": round(useful / total, 3) if total else None,
+        "decisions": len({r.get("decision_id") for r in rows}),
+        "most_rejected": sorted(negative.items(), key=lambda kv: (-kv[1], kv[0]))[:5],
+    }
+
+
+def _load_labels_from_postgres() -> list[dict]:
+    import psycopg
+    from psycopg.rows import dict_row
+    with psycopg.connect(settings.CONNINFO, row_factory=dict_row, connect_timeout=10) as pg:
+        return pg.execute(
+            "SELECT decision_id, useful, note, sources FROM memory_feedback ORDER BY id"
+        ).fetchall()
+
+
 def _load_cases_from_postgres() -> list[dict]:
     import psycopg
     from psycopg.rows import dict_row
@@ -162,6 +194,15 @@ def render(report: dict) -> str:
         for r in misses:
             lines.append(f"    #{r['decision_id']} msg {r['message_id']}: {r['query'][:70]!r} "
                          f"(léxico {r['lexical_rank']}, híbrido {r['hybrid_rank']})")
+    labels = report.get("labels")
+    if labels and labels["labels"]:
+        lines.append(f"  etiquetas humanas: {labels['labels']} calificaciones en {labels['decisions']} decisiones; "
+                     f"útil en {labels['useful_rate'] * 100:.0f}%")
+        for source, n in labels["most_rejected"]:
+            lines.append(f"    {n:>3}× en bloques marcados 'no sirvió': {source}")
+    else:
+        # sin emoji: la consola de Windows (cp1252) no los imprime
+        lines.append("  etiquetas humanas: ninguna todavía (Sirvió / No sirvió en la tarjeta de síntesis)")
     lines.append("  (mide si se reencuentra el dossier de origen; no si era la mejor memoria)")
     return "\n".join(lines)
 
@@ -177,7 +218,11 @@ def main(argv=None) -> int:
         print("[eval_retrieval] sin seguimientos humanos en el tablero", file=sys.stderr)
         return 1
     report = evaluate(cases, settings.DB_PATH, _real_retrieve, _real_reindex, args.same_repo)
-    print(json.dumps(report, ensure_ascii=False, indent=1) if args.json else render(report))
+    try:
+        report["labels"] = summarize_labels(_load_labels_from_postgres())
+    except Exception as exc:  # base sin la migración 006: la evaluación sigue valiendo
+        print(f"[eval_retrieval] sin etiquetas humanas ({type(exc).__name__})", file=sys.stderr)
+    print(json.dumps(report, ensure_ascii=False, indent=1, default=str) if args.json else render(report))
     return 0
 
 

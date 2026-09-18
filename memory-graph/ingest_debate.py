@@ -80,6 +80,11 @@ def write_decision(conn, r: dict, now: str) -> None:
         "explicit_memory": extract(r.get("human_messages") or []),
         "experience": experience_for(r),
         "approved_conditions": minority.get("approved_conditions") or [],
+        "memory_sources": minority.get("memory_sources") or {},
+        "memory_feedback": [
+            {k: f.get(k) for k in ("id", "round", "useful", "note", "sources", "created_at")}
+            for f in (r.get("memory_feedback") or [])
+        ],
         "pending": "Awaiting human input" if r["status"] == "split" else
                    "Implementation in progress" if r["status"] == "executing" else
                    "Deliberation in progress" if r["status"] == "open" else None,
@@ -167,6 +172,7 @@ def main() -> None:
             """
             SELECT d.*,
                    COALESCE((SELECT jsonb_agg(to_jsonb(o) ORDER BY o.id) FROM decision_outcomes o WHERE o.decision_id=d.id), '[]'::jsonb) AS outcome_reports,
+                   COALESCE((SELECT jsonb_agg(to_jsonb(f) ORDER BY f.id) FROM memory_feedback f WHERE f.decision_id=d.id), '[]'::jsonb) AS memory_feedback,
                    COALESCE((SELECT jsonb_agg(jsonb_build_object('id',id,'author',author,'body',left(body,2000),'created_at',created_at) ORDER BY id)
                        FROM messages WHERE thread=d.thread AND author='magi' AND kind IN ('resultado','consulta')), '[]'::jsonb) AS system_messages,
                    COALESCE((SELECT jsonb_agg(jsonb_build_object(
