@@ -1,5 +1,7 @@
 # MAGI Council — three AI heads that deliberate, vote and execute
 
+[![CI](https://github.com/Adrian-Sandwich/magi-council/actions/workflows/ci.yml/badge.svg)](https://github.com/Adrian-Sandwich/magi-council/actions/workflows/ci.yml)
+
 A **MAGI council of three heads** (Melchior / Balthasar / Casper — the persona
 lives in the seat, the provider is swappable: kimi, codex, claude, Ollama, any
 CLI or OpenAI-compatible API) that deliberate on your questions and vote on
