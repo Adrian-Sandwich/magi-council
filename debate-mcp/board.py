@@ -311,7 +311,7 @@ def human_message(conn, thread: str, body: str, action: str | None = None) -> di
             conn.execute(
                 """UPDATE decisions SET minority_report =
                    COALESCE(minority_report, '{}'::jsonb) ||
-                   jsonb_build_object('execution_state', %s)
+                   jsonb_build_object('execution_state', %s::text)
                    WHERE id = %s""", (retry_state, d["id"]),
             )
     elif d is not None:
