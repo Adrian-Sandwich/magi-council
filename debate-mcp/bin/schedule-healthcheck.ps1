@@ -24,9 +24,12 @@ if (-not (Test-Path -LiteralPath $python)) { throw "Falta $python (crea el venv 
 New-Item -ItemType Directory -Force -Path (Split-Path $log) | Out-Null
 
 # cmd /c para poder redirigir al log; la tarea corre en la sesion interactiva
-# del usuario (LogonType Interactive) para que el toast se vea.
+# del usuario (LogonType Interactive) para que el toast se vea. El comando
+# entero va entre comillas extra: cmd /c quita la primera y la ultima comilla
+# de la linea, y con dos rutas entrecomilladas eso rompia la invocacion
+# (LastTaskResult 0x8007042B).
 $command = "`"$python`" `"$script`" --notify --quiet >> `"$log`" 2>&1"
-$action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument "/c $command" -WorkingDirectory $app
+$action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument "/c `"$command`"" -WorkingDirectory $app
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
     -RepetitionInterval (New-TimeSpan -Minutes $Minutes)
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 5) `

@@ -62,6 +62,21 @@ def real_kimi_logs() -> Path:
 
 
 @pytest.fixture(autouse=True)
+def _relay_log_isolated(monkeypatch, tmp_path):
+    """Ningún test escribe en debate-mcp/logs de verdad. Un test de regresión
+    de producción dejó 16 eventos con pid 1234 en trigger_events.jsonl, que
+    después contaban en metrics.py y healthcheck como turnos reales."""
+    try:
+        import relay
+    except Exception:  # tests que no tocan el relay
+        return
+    monkeypatch.setattr(relay, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(relay, "EVENTS_PATH", tmp_path / "trigger_events.jsonl")
+    monkeypatch.setattr(relay, "HEARTBEAT_PATH", tmp_path / "relay_heartbeat.json")
+    monkeypatch.setattr(relay, "STATE_PATH", tmp_path / "relay_state.json")
+
+
+@pytest.fixture(autouse=True)
 def _no_accidental_agent_spawn(monkeypatch):
     """Red de seguridad: ningún test tiene por qué lanzar un `claude -p` real."""
     def _boom(*a, **kw):
