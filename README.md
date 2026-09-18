@@ -204,7 +204,8 @@ There is no production mode switch. A request starts as one conversation. If
 it already asks to implement something, MAGI treats the approved result as an
 executable plan. If it began as analysis, continue the closed dossier with a
 natural instruction such as **"vamos con tu plan"**, **"arréglalo"** or
-**"aplica la propuesta"**. The intent line announces the transition before
+**"aplica la propuesta"**; **"apruebo tu plan"** is understood as the same
+execution intent. The intent line announces the transition before
 sending. Execution is only allowed for an approved decision; its selected
 repository or the configured default repository becomes the isolated worktree:
 
@@ -216,12 +217,23 @@ repository or the configured default repository becomes the isolated worktree:
 3. A **review** opens on the exact produced commit. The heads inspect the
    worktree; the dossier stores the review ID, base SHA and reviewed SHA. If
    the executor leaves uncommitted changes, execution fails before review.
+   Review votes are scoped to the approved plan: unrelated findings and work
+   explicitly deferred to another decision may be recorded, but do not block
+   this merge.
 4. Unanimous → a **`--no-ff` merge is prepared in an integration worktree**
    and your branch advances with `--ff-only`. It requires the same base
    branch, the same base commit, clean directories and the reviewed commit
-   intact. The merge content must match what was approved. 2/3 majority,
+   intact. The merge content must match what was approved. MAGI supplies a
+   local commit identity for the integration commit; it does not require or
+   modify your global Git identity. 2/3 majority,
    rejection or later changes → **MERGE PENDING**, with the reason in the
    journal.
+
+When a review closes `conditional`, approving that review does not execute the
+review as a new plan and does not reopen it for another debate round. Its
+in-scope conditions return to the original production decision, the executor
+continues in the same worktree, and MAGI opens a new review for the new exact
+commit. The previous reviews and votes remain in the journal.
 
 Until you ask to implement it, a decision is only **decided**. The conditions from `conditional`
 votes in the approved round are preserved for the executor, including the
@@ -229,12 +241,21 @@ majority's. If execution fails, it
 waits for an explicit retry; failures are never deleted from the journal.
 
 Worktrees are kept in `<git-common-dir>/magi-worktrees/` for inspection and
-recovery. "retry" reuses the execution worktree and opens a new review; it
-never silently changes the plan's base. If your base branch moved, open a new
-plan on that base or resolve the integration manually. A Postgres lock per
+recovery. After an executor failure, **"retry"** reuses the execution worktree
+and opens a new review; after a merge failure, it retries only the already
+approved merge and does not run the executor again. It never silently changes
+the plan's base. If your base branch moved, open a new plan on that base or
+resolve the integration manually. A Postgres lock per
 repository coordinates executors and merges across relays sharing that
 database. Avoid manual Git operations concurrently during the final
 integration step: that lock only coordinates relays.
+
+While heads or the executor are running, the active seat polygons pulse in
+their own colors. The line below `ADAPTIVE · ROUND` names the current phase,
+seat and elapsed time. Runtime events carry stable per-seat tokens, so parallel
+heads remain distinguishable. Inline journal prompts are bounded by both
+message count and character count; a long late-round transcript cannot grow
+without limit or overwhelm a CLI process.
 
 Stale reviews — without a commit and review ID bound to the plan — don't
 enable auto-merge. They're kept for manual resolution. No schema migration
