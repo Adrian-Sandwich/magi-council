@@ -404,6 +404,45 @@ def follow_up_decision(conn, decision_id: int, body: str) -> dict:
             "thread": d["thread"], "action": "follow_up"}
 
 
+def continue_from_proposal(conn, decision_id: int, action: str) -> dict:
+    """Resolve a supervised next-move proposal without rearming its source.
+
+    Execution and discussion both open a linked decision, so the proposed
+    scope receives a fresh council vote. Saving or stopping only records the
+    operator's disposition on the completed dossier.
+    """
+    if action not in ("execute", "discuss", "save", "stop"):
+        raise ValueError("acción de continuidad inválida")
+    d = conn.execute(
+        "SELECT * FROM decisions WHERE id = %s FOR UPDATE", (decision_id,)
+    ).fetchone()
+    if d is None:
+        raise ValueError(f"decisión {decision_id} no existe")
+    report = d.get("minority_report") or {}
+    proposal = (report.get("synthesis") or {}).get("next_move")
+    if (d["status"] != "closed" or report.get("execution_state") != "merged"
+            or not isinstance(proposal, dict) or not proposal.get("title")):
+        raise ValueError("esta decisión no tiene un siguiente movimiento disponible")
+    if report.get("continuation"):
+        raise ValueError("el siguiente movimiento de esta decisión ya fue resuelto")
+    disposition = {"action": action, "title": proposal["title"]}
+    conn.execute(
+        """UPDATE decisions SET minority_report =
+           COALESCE(minority_report, '{}'::jsonb) || %s::jsonb WHERE id = %s""",
+        (Json({"continuation": disposition}), decision_id),
+    )
+    if action in ("save", "stop"):
+        return {"decision_id": decision_id, "action": f"continuation_{action}"}
+    if action == "execute":
+        body = (f"Vamos con eso: {proposal['title']}. "
+                f"Resultado esperado: {proposal.get('expected_result', '')}")
+    else:
+        body = (f"Discutamos el siguiente movimiento propuesto: {proposal['title']}. "
+                f"Riesgo a evaluar: {proposal.get('risk', '')}")
+    opened = follow_up_decision(conn, decision_id, body)
+    return {**opened, "continuation_action": action}
+
+
 def execute_approved_decision(conn, decision_id: int, body: str) -> dict:
     """Pasa un análisis aprobado al pipeline de ejecución y revisión."""
     d = conn.execute(

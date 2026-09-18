@@ -62,6 +62,44 @@ def test_follow_up_after_merged_production_opens_linked_decision(monkeypatch):
                    for call in conn.execute.call_args_list)
 
 
+@pytest.mark.parametrize("action", ["save", "stop"])
+def test_next_move_can_be_recorded_without_opening_work(action):
+    conn = Mock()
+    conn.execute.return_value.fetchone.return_value = {
+        "id": 28, "status": "closed", "minority_report": {
+            "execution_state": "merged", "synthesis": {"next_move": {
+                "title": "Conectar eventos", "expected_result": "Eventos activos", "risk": "Medio",
+            }},
+        },
+    }
+    result = board.continue_from_proposal(conn, 28, action)
+    assert result == {"decision_id": 28, "action": f"continuation_{action}"}
+    patch = conn.execute.call_args_list[1].args[1][0].obj
+    assert patch["continuation"] == {"action": action, "title": "Conectar eventos"}
+
+
+@pytest.mark.parametrize("action,production", [("execute", True), ("discuss", False)])
+def test_next_move_opens_fresh_linked_decision(monkeypatch, action, production):
+    conn = Mock()
+    conn.execute.return_value.fetchone.return_value = {
+        "id": 28, "status": "closed", "minority_report": {
+            "execution_state": "merged", "synthesis": {"next_move": {
+                "title": "Conectar eventos", "expected_result": "Eventos activos", "risk": "Medio",
+            }},
+        },
+    }
+    seen = {}
+    def follow_up(_conn, identifier, body):
+        seen["body"] = body
+        return {"action": "opened_follow_up", "decision_id": 33,
+                "source_decision_id": identifier, "production": board.is_execution_request(body)}
+    monkeypatch.setattr(board, "follow_up_decision", follow_up)
+    result = board.continue_from_proposal(conn, 28, action)
+    assert result["decision_id"] == 33
+    assert result["production"] is production
+    assert result["continuation_action"] == action
+
+
 @pytest.mark.parametrize("text", [
     "pues arréglalo", "vamos con tu plan", "adelante con el plan",
     "haz lo que propones", "aplica la propuesta", "ok sigamos con eso",

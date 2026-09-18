@@ -63,6 +63,42 @@ def test_executing_shows_live_worker_evidence(page):
     assert "BALTHASAR:" in page.locator(".system-status .execution-script").inner_text()
 
 
+def test_internal_live_log_is_always_visible(page):
+    assert "SYSTEM READY" in page.locator(".system-status .execution-script").inner_text()
+    data = snapshot("closed")
+    data["decisions"][0].update(ruling="yes", execution_state="merged")
+    feed(page, data)
+    line = page.locator(".system-status .execution-script")
+    assert line.is_visible()
+    assert "OBJECTIVE COMPLETE" in line.inner_text()
+    stacking = page.locator(".system-status").evaluate(
+        "el => ({z:getComputedStyle(el).zIndex, position:getComputedStyle(el).position, className:el.className})")
+    assert stacking["position"] == "relative" and stacking["z"] == "8", stacking
+
+
+def test_merged_work_proposes_supervised_next_move(page):
+    data = snapshot("closed")
+    proposal = {"title": "Conectar eventos", "reason": "Las funciones ya existen",
+                "expected_result": "Eventos durante la partida", "scope": "Cuatro archivos",
+                "risk": "Medio", "recommendation": "discuss"}
+    data["decisions"][0].update(ruling="yes", execution_state="merged",
+                                 synthesis={"status": "reviewed", "answer": "Objetivo completo",
+                                            "agreements": [], "differences": [], "open_questions": [],
+                                            "reviews": [], "cycle": 1, "next_move": proposal})
+    feed(page, data)
+    assert page.locator("#continuation-title").inner_text() == "Conectar eventos"
+    assert "NEXT MOVE READY" in page.locator(".system-status .execution-script").inner_text()
+    sent = []
+    page.route("**/continuation", lambda route: (
+        sent.append(route.request.post_data_json),
+        route.fulfill(status=201, content_type="application/json",
+                      body='{"action":"opened_follow_up","decision_id":5,"source_decision_id":4}')
+    ))
+    page.get_by_role("button", name="Discutámoslo").click()
+    page.wait_for_function("document.getElementById('c-status').textContent.includes('decision #5')")
+    assert sent == [{"decision_id": 4, "action": "discuss"}]
+
+
 def test_joint_answer_replaces_transcript_and_marks_partial_review(page):
     data = snapshot('closed')
     d = data['decisions'][0]
@@ -89,6 +125,7 @@ def test_draft_visible_while_head_review_is_pending(page):
     assert page.locator('#summary-lead').inner_text() == 'Respuesta provisional útil'
     assert 'Borrador en revisión' in page.locator('#summary-title').inner_text()
     assert 'melchior' in page.locator('#summary-content').inner_text()
+    assert page.locator('.wise-man.melchior .thinking-tag').inner_text() == 'SYNTHESIZING'
 
 
 def test_editorial_approval_does_not_hide_unresolved_content(page):

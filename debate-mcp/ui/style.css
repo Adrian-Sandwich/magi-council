@@ -127,6 +127,12 @@ body {
     grid-area: status;
     font-family: 'Lucida Console';
     color: #ff8d00;
+    position: relative;
+    z-index: 8;
+    align-self: center;
+    pointer-events: none;
+    max-width: 32cqw;
+    background: linear-gradient(90deg, #000 0 92%, transparent);
 }
 
 .magi>.system-status>div {
@@ -149,6 +155,14 @@ body {
     max-width: 31cqw;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+.magi>.system-status>.execution-script.idle {
+    color: #8e682f;
+}
+
+.magi>.system-status>.execution-script.live {
+    animation: pulse 1.2s infinite;
 }
 
 .magi>.response {
@@ -571,6 +585,17 @@ body {
 #outcome-form textarea { display: block; box-sizing: border-box; width: 100%; margin-top: 5px; }
 .summary-meta { color: #ffb454; font-size: 12px; letter-spacing: .04em; }
 .summary-conditions { border-left: 3px solid #52e691; color: #bfe9ca; line-height: 1.5; margin-top: 12px; padding: 7px 10px; }
+.continuation-card { border: 1px solid #3caee0; border-left: 4px solid #3caee0; background: #061017; margin-top: 16px; padding: 14px; color: #d9ebf3; }
+.continuation-kicker { color: #3caee0; font-size: 10px; letter-spacing: .14em; }
+.continuation-card h3 { color: #bdeaff; margin: 7px 0; font-size: 17px; }
+.continuation-card p { line-height: 1.5; }
+.continuation-card dl { display: grid; grid-template-columns: max-content 1fr; gap: 7px 12px; margin: 12px 0; }
+.continuation-card dt { color: #6fc9ee; font-size: 10px; letter-spacing: .08em; }
+.continuation-card dd { margin: 0; color: #d4c9b9; line-height: 1.4; }
+.continuation-recommendation { color: #ffbf6c; }
+.continuation-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.continuation-actions button:first-child { border-color: #52e691; color: #8ff0b5; }
+.continuation-state { border-top: 1px solid #285d73; color: #8ff0b5; padding-top: 10px; }
 .execution-progress { border-left: 3px solid #ffb454; color: #f2dfc5; padding: 8px 10px; animation: pulse-work 1.8s ease-in-out infinite; }
 @keyframes pulse-work { 50% { opacity: .58; } }
 .summary-seats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 14px; }
@@ -663,5 +688,7 @@ dialog::backdrop { background: #000b; }
   .modal>.modal-body { font-size: 14px; }
   .summary-seats { grid-template-columns: 1fr; }
   .summary-card { padding: 13px; }
+  .continuation-card dl { grid-template-columns: 1fr; gap: 3px; }
+  .continuation-card dd { margin-bottom: 8px; }
   .detail-panel > summary span { display: block; margin: 5px 0 0 20px; }
 }

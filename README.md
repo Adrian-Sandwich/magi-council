@@ -240,6 +240,14 @@ After production is already merged, an informational follow-up such as
 reopen or re-execute the completed production dossier; the new decision keeps
 the repository context and records which completed decision it follows.
 
+Once a merged objective has a reviewed synthesis, MAGI may surface one bounded
+**next move** supported by the dossier. The proposal states its reason, expected
+result, scope, risk and recommendation. **Vamos con esto** opens a linked
+production decision that must earn fresh council approval before execution;
+**Discutámoslo** opens a linked analysis. **Guardar para después** and
+**Terminar** only record the operator's choice. A completed objective never
+authorizes the next one by itself, and a proposal can be resolved only once.
+
 Until you ask to implement it, a decision is only **decided**. The conditions from `conditional`
 votes in the approved round are preserved for the executor, including the
 majority's. If execution fails, it
@@ -255,9 +263,12 @@ repository coordinates executors and merges across relays sharing that
 database. Avoid manual Git operations concurrently during the final
 integration step: that lock only coordinates relays.
 
-While heads or the executor are running, the active seat polygons pulse in
-their own colors. The line below `ADAPTIVE · ROUND` names the current phase,
-seat and elapsed time. Runtime events carry stable per-seat tokens, so parallel
+The live line below `ADAPTIVE · ROUND` is always present in the original MAGI
+display: it reports standby, deliberation, synthesis, execution, review,
+completion or a next move awaiting authorization. It has a reserved foreground
+layer so Casper and Balthasar cannot cover it. While heads, synthesis reviewers
+or the executor are running, the active seat polygons pulse in their own
+colors. Runtime events carry stable per-seat tokens, so parallel
 heads remain distinguishable. Inline journal prompts are bounded by both
 message count and character count; a long late-round transcript cannot grow
 without limit or overwhelm a CLI process.

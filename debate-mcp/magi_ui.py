@@ -242,6 +242,7 @@ def build_state(conn) -> dict:
             "production": bool(r.get("production")),
             "approved_conditions": list(mr.get("approved_conditions") or []),
             "deferred_items": list(mr.get("deferred_items") or []),
+            "continuation": mr.get("continuation"),
             "turn_errors": errors,
             "synthesis": synthesis,
             "outcome": r.get('outcome'),
@@ -492,7 +493,7 @@ class Handler(BaseHTTPRequestHandler):
     # ---------------------------------------------------------- POST
 
     def do_POST(self) -> None:
-        if self.path not in ("/start", "/message", "/abort", "/outcome", "/retry-turns"):
+        if self.path not in ("/start", "/message", "/abort", "/outcome", "/retry-turns", "/continuation"):
             self._send_json({"error": "not found"}, 404)
             return
 
@@ -537,8 +538,22 @@ class Handler(BaseHTTPRequestHandler):
             self._retry_turns(payload)
         elif self.path == "/outcome":
             self._outcome(payload)
+        elif self.path == "/continuation":
+            self._continuation(payload)
         else:
             self._message(payload)
+
+    def _continuation(self, payload):
+        try:
+            with connect() as conn:
+                with conn.transaction():
+                    result = board.continue_from_proposal(
+                        conn, int(payload.get("decision_id") or 0),
+                        str(payload.get("action") or ""),
+                    )
+            self._send_json(result, 201 if result.get("action") == "opened_follow_up" else 200)
+        except (ValueError, TypeError) as exc:
+            self._send_json({"error": str(exc)}, 409)
 
     def _outcome(self, payload):
         try:

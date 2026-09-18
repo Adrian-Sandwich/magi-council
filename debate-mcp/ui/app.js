@@ -86,8 +86,13 @@ function thinkingSeats(d) {
 
 function renderMagi(d) {
   const activeExecution = d?.status === "executing" ? d.execution_activity : null;
-  const tick = activeExecution ? Math.floor(Date.now() / 5000) : 0;
-  const signature = JSON.stringify(d ? [d.id, d.round, d.status, d.badge, d.seats, activeExecution, tick] : null);
+  const activeSeat = d?.seats?.find(seat => seat.activity);
+  const synthesis = d?.synthesis;
+  const live = activeExecution || activeSeat?.activity || synthesis?.status === "generating";
+  const tick = live ? Math.floor(Date.now() / 5000) : 0;
+  const signature = JSON.stringify(d ? [d.id, d.round, d.status, d.badge, d.seats,
+    activeExecution, synthesis?.status, synthesis?.phase, synthesis?.current_head,
+    synthesis?.next_move?.title, d.continuation, tick] : null);
   if (signature === magiSignature) return;
   magiSignature = signature;
   const magi = document.getElementById("magi");
@@ -104,37 +109,64 @@ function renderMagi(d) {
   status.className = "system-status";
   const ext = d ? `${String(d.protocol).toUpperCase()} · ROUND ${d.round}` : "STANDBY";
   status.innerHTML = `<div>${esc(ext)}</div>`;
+  const line = document.createElement("div");
+  line.className = `execution-script${live ? " live" : " idle"}`;
   if (activeExecution) {
     const elapsed = activeExecution.started_at
       ? Math.max(0, Math.round((Date.now() - Date.parse(activeExecution.started_at)) / 1000)) : 0;
     const phases = ["READING APPROVED PLAN", "INSPECTING ISOLATED WORKTREE", "APPLYING AND VERIFYING CHANGES"];
     const phase = activeExecution.phase || phases[Math.floor(elapsed / 8) % phases.length];
-    const line = document.createElement("div");
-    line.className = "execution-script";
     line.textContent = `▸ ${String(activeExecution.seat || "executor").toUpperCase()}: ${phase} · ${elapsed}s`;
-    status.appendChild(line);
+  } else if (activeSeat?.activity) {
+    const activity = activeSeat.activity;
+    const elapsed = activity.started_at
+      ? Math.max(0, Math.round((Date.now() - Date.parse(activity.started_at)) / 1000)) : 0;
+    const phase = activity.turn === "synthesis" ? "SYNTHESIZING" : "INVESTIGATING";
+    line.textContent = `▸ ${activeSeat.seat.toUpperCase()}: ${phase} · ${elapsed}s`;
+  } else if (synthesis?.status === "generating") {
+    const phase = synthesis.phase === "drafting" ? "DRAFTING COUNCIL ANSWER" : "REVIEWING COUNCIL ANSWER";
+    line.textContent = `▸ ${String(synthesis.current_head || "MAGI").toUpperCase()}: ${phase}`;
+  } else if (d?.status === "open") {
+    line.textContent = "▸ MAGI: DELIBERATION IN PROGRESS";
+  } else if (d?.status === "executing" && d.execution_state === "reviewing") {
+    line.textContent = "▸ MAGI: IMPLEMENTATION UNDER REVIEW";
+  } else if (d?.execution_state === "merged" && synthesis?.next_move && !d.continuation) {
+    line.textContent = "▸ MAGI: NEXT MOVE READY FOR AUTHORIZATION";
+  } else if (d?.execution_state === "merged") {
+    line.textContent = "▸ MAGI: OBJECTIVE COMPLETE · STANDBY";
+  } else if (d?.status === "closed") {
+    line.textContent = "▸ MAGI: DECISION COMPLETE · STANDBY";
+  } else if (d?.status === "split") {
+    line.textContent = "▸ MAGI: WAITING FOR OPERATOR RULING";
+  } else {
+    line.textContent = "▸ MAGI: SYSTEM READY · STANDBY";
   }
+  status.appendChild(line);
   magi.appendChild(status);
 
   (d?.seats ?? SLOTS.map(seat => ({seat, voted:false}))).slice(0, 3).forEach((seat, i) => {
     const slot = SLOTS[i];
     const isThinking = thinking.includes(seat.seat);
     const isExecuting = activeExecution?.seat === seat.seat;
+    const isSynthesizing = synthesis?.status === "generating"
+      && (synthesis.current_head === seat.seat || synthesis.current_head === "all heads");
+    const isActive = isThinking || isExecuting || isSynthesizing || Boolean(seat.activity);
     const color = isExecuting ? SEAT_COLORS[seat.seat]
       : seat.voted ? POSITION_COLORS[seat.position] : POSITION_COLORS.pending;
     const outer = document.createElement("div");
     outer.className = `wise-man ${slot}${isExecuting ? " executor-active" : ""}`;
     outer.style.setProperty("--executor-color", safeColor(SEAT_COLORS[seat.seat] || "#ff8d00"));
     const inner = document.createElement("div");
-    inner.className = "inner" + (isThinking ? " flicker" : "");
+    inner.className = "inner" + (isActive ? " flicker" : "");
     inner.style.background = color;
     if (seat.voted && ["yes", "conditional", "info"].includes(seat.position)) inner.style.color = "#080604";
     inner.textContent = `${seat.seat.toUpperCase()} • ${i + 1}`;
     outer.appendChild(inner);
-    if (isThinking || isExecuting || seat.error) {
+    if (isActive || seat.error) {
       const tag = document.createElement("div");
       tag.className = "thinking-tag";
-      tag.textContent = seat.error ? "ERROR" : isExecuting ? "EXECUTING" : "THINKING";
+      tag.textContent = seat.error ? "ERROR" : isExecuting ? "EXECUTING"
+        : isSynthesizing ? "SYNTHESIZING" : "THINKING";
       outer.appendChild(tag);
     }
     outer.addEventListener("click", () => openModal(seat));
@@ -253,7 +285,10 @@ function renderSummary(d) {
   const conditions = document.getElementById("summary-conditions");
   const seats = document.getElementById("summary-seats");
   const content = document.getElementById("summary-content");
+  const continuation = document.getElementById("continuation-card");
   content.replaceChildren();
+  continuation.replaceChildren();
+  continuation.hidden = true;
   if (!d) {
     card.classList.add("empty"); title.textContent = "No decision selected";
     lead.textContent = "Ask a question to get a readable conclusion from all three heads.";
@@ -354,6 +389,8 @@ function renderSummary(d) {
     conditions.hidden = false;
     conditions.innerHTML += `${allConditions.length ? "<br>" : ""}<strong>Later:</strong> ${d.deferred_items.map(esc).join(" · ")}`;
   }
+  const proposal = d.execution_state === "merged" ? d.synthesis?.next_move : null;
+  if (proposal) renderContinuation(d, proposal, continuation);
   seats.innerHTML = (d.seats || []).map(s => {
     const color = safeColor(SEAT_COLORS[s.seat] || "#d8d8d8");
     const elapsed = s.activity?.started_at
@@ -443,6 +480,68 @@ function renderHistory() {
 // qué hará mi mensaje": la UI anticipa la acción antes de que la escribas.
 function executionIntent(text) {
   return /^\s*(?:(?:pues|bueno|entonces)\s+|ok[,;:]?\s+)?(?:arr[eé]gl(?:ar|alo|ala|enlo)|implement(?:ar|a|alo|enlo)|hazlo|h[aá]ganlo|ejecut(?:ar|a|alo|enlo)|aplic(?:ar|a|alo|enlo)|procede|apruebo\s+(?:tu\s+plan|el\s+plan|ese\s+plan|la\s+propuesta)|vamos\s+con\s+(?:eso|los\s+cambios|tu\s+plan|el\s+plan|ese\s+plan|tu\s+propuesta|la\s+propuesta)|sigamos\s+con\s+(?:eso|los\s+cambios|tu\s+plan|el\s+plan)|adelante\s+con\s+(?:el\s+plan|tu\s+plan|eso)|haz\s+lo\s+que\s+propones)\b/i.test(text || "");
+}
+
+function renderContinuation(d, proposal, card) {
+  const disposition = d.continuation?.action;
+  card.hidden = false;
+  const recommendation = {
+    execute: "MAGI recommends deliberating this move for execution.",
+    discuss: "MAGI recommends discussing the scope before execution.",
+    save: "MAGI recommends saving this opportunity for later.",
+    stop: "MAGI recommends stopping here unless priorities change.",
+  }[proposal.recommendation] || "MAGI found a related opportunity.";
+  card.innerHTML = `<div class="continuation-kicker">NEXT MOVE PROPOSED</div>
+    <h3 id="continuation-title">${esc(proposal.title)}</h3>
+    <p>${esc(proposal.reason)}</p>
+    <dl><dt>EXPECTED</dt><dd>${esc(proposal.expected_result)}</dd>
+      <dt>SCOPE</dt><dd>${esc(proposal.scope)}</dd>
+      <dt>RISK</dt><dd>${esc(proposal.risk)}</dd></dl>
+    <p class="continuation-recommendation">${esc(recommendation)}</p>`;
+  if (disposition) {
+    const saved = document.createElement("p");
+    saved.className = "continuation-state";
+    saved.textContent = ({execute: "Approved · linked decision opened", discuss: "Discussion opened",
+      save: "Saved for later", stop: "Cycle stopped"}[disposition] || disposition);
+    card.append(saved);
+    return;
+  }
+  const actions = document.createElement("div");
+  actions.className = "continuation-actions";
+  for (const [action, label] of [["execute", "Vamos con esto"], ["discuss", "Discutámoslo"],
+                                  ["save", "Guardar para después"], ["stop", "Terminar"]]) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.action = action;
+    button.textContent = label;
+    button.addEventListener("click", () => chooseContinuation(d, action, button));
+    actions.append(button);
+  }
+  card.append(actions);
+}
+
+async function chooseContinuation(d, action, button) {
+  if (sending) return;
+  const status = document.getElementById("c-status");
+  sending = true;
+  button.closest(".continuation-actions").querySelectorAll("button").forEach(b => b.disabled = true);
+  status.textContent = "registering next move…";
+  try {
+    const resp = await postJSON("/continuation", {decision_id: d.id, action});
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || resp.statusText);
+    d.continuation = {action, title: d.synthesis?.next_move?.title};
+    if (data.action === "opened_follow_up") focusedId = data.decision_id;
+    status.textContent = action === "execute"
+      ? `next move opened as production decision #${data.decision_id} · council approval is required before execution`
+      : action === "discuss" ? `next move opened for discussion as decision #${data.decision_id}`
+      : action === "save" ? "next move saved for later" : "agentic cycle stopped";
+  } catch (err) {
+    status.textContent = `error: ${err.message}`;
+  } finally {
+    sending = false;
+    render();
+  }
 }
 
 function renderIntent(d) {

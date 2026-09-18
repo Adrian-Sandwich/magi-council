@@ -1,6 +1,8 @@
 import json
 import threading
 
+import pytest
+
 import council_synthesis as synthesis
 
 
@@ -8,6 +10,21 @@ BUNDLE = {'question': '¿Qué hacemos?', 'heads': ['melchior','balthasar','caspe
 SEATS = [{'seat': s, 'type': 'api'} for s in BUNDLE['heads']]
 DRAFT = {'answer': 'Probar primero, conservando los datos.', 'agreements': ['Conservar datos'],
          'differences': ['El plazo sigue en discusión'], 'open_questions': []}
+
+
+def test_parser_accepts_one_bounded_next_move_or_none():
+    move = {'title': 'Conectar eventos', 'reason': 'Las funciones existen sin uso',
+            'expected_result': 'Eventos visibles durante la partida', 'scope': 'Cuatro archivos',
+            'risk': 'Medio', 'recommendation': 'discuss'}
+    assert synthesis.parse(json.dumps(dict(DRAFT, next_move=move)))['next_move'] == move
+    assert synthesis.parse(json.dumps(DRAFT))['next_move'] is None
+
+
+def test_parser_rejects_unbounded_next_move():
+    move = {'title': 'Conectar eventos', 'reason': 'Motivo', 'expected_result': 'Resultado',
+            'scope': 'Alcance', 'risk': 'Riesgo', 'recommendation': 'run-forever'}
+    with pytest.raises(ValueError):
+        synthesis.parse(json.dumps(dict(DRAFT, next_move=move)))
 
 
 def test_parser_bounds_verbose_but_valid_editor_lists():

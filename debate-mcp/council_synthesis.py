@@ -48,10 +48,21 @@ def parse(text, review=False):
                     break
                 extra[key] = items
             else:
+                next_move = value.get('next_move')
+                if next_move is not None:
+                    allowed = ('title', 'reason', 'expected_result', 'scope', 'risk', 'recommendation')
+                    if (not isinstance(next_move, dict)
+                            or set(next_move) != set(allowed)
+                            or not all(isinstance(next_move.get(k), str)
+                                       and 1 <= len(next_move[k].strip()) <= 500
+                                       for k in allowed)
+                            or next_move['recommendation'] not in ('execute', 'discuss', 'save', 'stop')):
+                        continue
                 candidates.append({
                     'answer': value['answer'],
                     **{k: value[k][:5] for k in ('agreements', 'differences', 'open_questions')},
                     **extra,
+                    'next_move': next_move,
                 })
     if not candidates:
         raise ValueError('Invalid synthesis response')
@@ -84,8 +95,12 @@ def compose(bundle, seats, invoke, progress=lambda result: None):
                    'dentro del repositorio. Permisos/capacidades de la sesión, preguntas al operador y frases '
                    'sobre lo que queda fuera del alcance no son condiciones: ponelas en open_questions o deferred_items. '
                    'Usá como máximo 5 elementos en agreements, differences y open_questions. '
+                   'Si el objetivo ya está completo y las fuentes sustentan un avance relacionado de alto valor, '
+                   'incluí un único next_move con title, reason, expected_result, scope, risk y recommendation. '
+                   'recommendation debe ser execute, discuss, save o stop. Usá null si no hay un avance suficientemente '
+                   'justificado. Una mejora nueva nunca se considera autorizada por haber terminado la anterior. '
                    'Devolvé sólo JSON: {"answer":"...","agreements":[],"differences":[],"open_questions":[], '
-                   '"blocking_conditions":[],"deferred_items":[]}.')
+                   '"blocking_conditions":[],"deferred_items":[],"next_move":null}.')
         if feedback:
             prompt += '\nCorregí el borrador anterior según estas revisiones:\n' + json.dumps(feedback, ensure_ascii=False)
             prompt += '\nBORRADOR ANTERIOR:\n' + json.dumps(draft, ensure_ascii=False)

@@ -305,7 +305,8 @@ def test_post_sin_token_devuelve_403(ui_server, monkeypatch):
     )
     for path, payload in (("/start", {"title": "x"}),
                           ("/message", {"mode": "message", "body": "hola"}),
-                          ("/abort", {"decision_id": 1})):
+                          ("/abort", {"decision_id": 1}),
+                          ("/continuation", {"decision_id": 1, "action": "stop"})):
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
         conn.request("POST", path, json.dumps(payload), {"Content-Type": "application/json"})
         resp = conn.getresponse()
@@ -649,6 +650,20 @@ def test_retry_failed_turns_endpoint(ui_server_conn, monkeypatch):
     assert resp.status == 200
     assert json.loads(resp.read())['action'] == 'retried'
     assert calls == [(28, {'melchior': 'attempt-1'})]
+
+
+def test_continuation_endpoint_opens_linked_decision(ui_server_conn, monkeypatch):
+    port, _, _ = ui_server_conn
+    calls = []
+    def continue_from_proposal(db, did, action):
+        calls.append((did, action))
+        return {'action': 'opened_follow_up', 'decision_id': 33,
+                'source_decision_id': did, 'production': True}
+    monkeypatch.setattr(magi_ui.board, 'continue_from_proposal', continue_from_proposal)
+    resp = _post(port, '/continuation', {'decision_id': 28, 'action': 'execute'})
+    assert resp.status == 201
+    assert json.loads(resp.read())['decision_id'] == 33
+    assert calls == [(28, 'execute')]
 
 
 def test_post_abort_cierra_la_decision(ui_server_conn, monkeypatch):
