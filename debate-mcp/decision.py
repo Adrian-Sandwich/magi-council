@@ -212,11 +212,17 @@ def build_head_prompt(seat: str, persona: str, decision: dict, since_id: int,
             "argumentos son mejores que los tuyos; si te mantenés, reforzá tu posición "
             "contra ellos. Cambiar de parecer es legítimo — queda registrado."
         )
-    else:
+    elif d.get("artifact"):
         lines.append(
             "2. Investigá el artefacto con tus herramientas (Read/Grep/Glob) antes de votar — "
             "con criterio: el journal ya trae el contexto del debate, así que andá a lo que sólo "
             "vos podés ver (correr tests, leer archivos clave). Evitá loops de lectura."
+        )
+    else:
+        lines.append(
+            "2. No hay repositorio ni documento seleccionado: no busques archivos en tu "
+            "directorio de trabajo (es el del sistema MAGI, no el tema). Razoná desde el "
+            "journal y tu conocimiento; citá fuentes comprobables cuando puedas."
         )
     lines.append(
         f"3. Publicá tu análisis y votá: cast_position(decision_id={d['id']}, "

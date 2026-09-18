@@ -776,7 +776,9 @@ def test_cabeza_inline_con_tools_investiga_antes_de_votar(fired_magi, monkeypatc
     seat_activo = {"seat": "balthasar", "name": "codex", "type": "cli",
                    "journal": "inline", "tools": True,
                    "bin": "/fake/bin", "args": ["exec"]}
-    d = mk_decision_row()
+    # con repositorio seleccionado: sin artefacto la instrucción es no
+    # investigar el disco (el cwd sería el de MAGI, no el tema)
+    d = mk_decision_row(artifact=str(tmp_path))
     cwd = str(tmp_path)
     relay._run_cli_inline_turn(seat_activo, d, cwd, memory="Memoria X")
 

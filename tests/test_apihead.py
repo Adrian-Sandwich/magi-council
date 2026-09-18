@@ -136,3 +136,15 @@ def test_strip_echo_quita_prompt_y_banner_de_codex():
     # texto sin eco ni banner queda intacto
     crudo = "POSITION: no\n\nmi razonamiento"
     assert apihead.strip_echo(crudo, prompt) == crudo
+
+
+def test_sin_artefacto_no_manda_a_investigar_el_repo():
+    """Para una pregunta filosófica el cwd es el de MAGI: la cabeza terminaba
+    leyendo personas.py y haciendo grep de 'humano' en el código (decisión
+    #26). Sin artefacto se razona desde el journal, no desde el disco."""
+    base = {"id": 26, "protocol": "adaptive", "round": 1, "title": "¿qué es la condición de ser humano?"}
+    sin = apihead.build_inline_active_prompt("casper", dict(base, artifact=None), [], None, "C:/magi")
+    con = apihead.build_inline_active_prompt("casper", dict(base, artifact="C:/repo"), [], None, "C:/repo")
+    assert "NO busques archivos" in sin and "git status" not in sin
+    assert "INVESTIGÁ con tus herramientas" in con and "NO busques archivos" not in con
+    assert "POSITION: yes|no|conditional|info" in sin

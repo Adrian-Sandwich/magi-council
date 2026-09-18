@@ -515,3 +515,12 @@ def test_abort_decision_marca_aborted_y_cierra():
     row = board.abort_decision(conn, 7)
     assert row["id"] == 7
     assert conn.inserted[0][1].startswith("ABORTADA")
+
+
+def test_prompt_mcp_sin_artefacto_no_manda_a_investigar_el_repo():
+    d = mk_decision(artifact=None)
+    txt = decision.build_head_prompt("melchior", personas.system_prompt("melchior"), d, 9)
+    assert "No hay repositorio ni documento seleccionado" in txt
+    assert "Read/Grep/Glob" not in txt
+    con = decision.build_head_prompt("melchior", personas.system_prompt("melchior"), mk_decision(artifact="/repo"), 9)
+    assert "Read/Grep/Glob" in con

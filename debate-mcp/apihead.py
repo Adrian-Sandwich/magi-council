@@ -136,9 +136,17 @@ def build_inline_active_prompt(seat: str, decision: dict, journal: list[dict],
     memoria_txt = f"\n\n{memory}" if memory else ""
     revision = decision.get('artifact_revision') or 'no disponible'
     investigation = (
+        # Sin artefacto, el cwd es el del sistema MAGI y no el tema: una cabeza
+        # que "investiga el repo" para una pregunta filosófica termina leyendo
+        # personas.py (visto en la decisión #26 sobre la condición humana).
+        "No hay repositorio ni documento seleccionado: NO busques archivos en "
+        "tu directorio de trabajo (es el del sistema MAGI, no el tema). Razoná "
+        "desde el journal y tu conocimiento; citá fuentes comprobables cuando "
+        "puedas y marcá lo que no puedas verificar."
+        if not decision.get('artifact') else
         "Antes de votar, INVESTIGÁ con tus herramientas: leé los archivos del "
-        "repo que importen, corré comandos de SOLO LECTURA (git status/diff, "
-        "grep, tests si aplican). No modifiques nada."
+        "repo o documento que importen, corré comandos de SOLO LECTURA (git "
+        "status/diff, grep, tests si aplican). No modifiques nada."
         if decision['round'] <= 1 else
         "Esta es una ronda posterior. Primero compará el HEAD actual con la "
         "evidencia y los SHA ya citados en el journal. Si no cambió, reutilizá "
