@@ -1241,3 +1241,19 @@ def test_las_fuentes_de_memoria_quedan_en_el_dossier_una_vez_por_ronda(fired_mag
     conn2 = FakeConn([], decisions=[mk_decision_row()])
     relay.process_cycle(conn2, fresh_state())
     assert not getattr(conn2, "updates", [])
+
+
+def test_el_turno_inline_registra_tamano_de_prompt_salida_y_memoria(monkeypatch, tmp_path):
+    """Para metrics.py: sin esto sólo sabíamos cuánto tardaba una cabeza, no
+    cuánto leía ni cuánto escribía."""
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setattr(relay, "_run_cli_inline", lambda seat, prompt, cwd, timeout, token=None: "POSITION: yes\n" + "x" * 500)
+    monkeypatch.setattr(relay.board, "record_position", lambda *a, **kw: ({"action": "wait"}, 1))
+    monkeypatch.setattr(relay, "connect", lambda: FakeConn([]))
+    seat = {"seat": "balthasar", "name": "codex", "type": "cli", "journal": "inline", "tools": True,
+            "bin": "/fake/bin", "args": ["exec"]}
+    relay._run_cli_inline_turn(seat, mk_decision_row(artifact=str(tmp_path)), str(tmp_path), memory="M" * 300)
+    done = [json.loads(l) for l in (tmp_path / "events.jsonl").read_text().splitlines()
+            if '"trigger_done"' in l][-1]
+    assert done["memory_chars"] == 300 and done["output_chars"] == 514
+    assert done["prompt_chars"] > 300 and done["rc"] == 0

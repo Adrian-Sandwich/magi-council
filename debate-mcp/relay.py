@@ -397,6 +397,12 @@ def _supervise(proc: subprocess.Popen, meta: dict) -> None:
         _kill_tree(proc)
         rc = proc.wait()
     duration = round(time.monotonic() - start, 1)
+    log_file = meta.pop("_log", None)
+    if log_file:
+        try:
+            meta["output_chars"] = Path(log_file).stat().st_size
+        except OSError:
+            pass
 
     if timed_out:
         log.error("agente %s en %s colgado tras %ss, matado", meta["author"], meta["thread"], AGENT_TIMEOUT_SECS)
@@ -499,6 +505,9 @@ def trigger(seat_name: str, thread: str, since_id: int, cwd: str, prompt: str, m
     log.info("disparo %s en thread=%s cwd=%s -> %s", seat_name, thread, cwd, out_path.name)
     event("trigger_spawned", pid=proc.pid, **meta)
 
+    # Para metrics.py: lo que leyó (prompt) y lo que escribió (el log de stdout).
+    meta["prompt_chars"] = len(prompt)
+    meta["_log"] = str(out_path)
     threading.Thread(target=_supervise, args=(proc, meta), daemon=True).start()
     return True
 
@@ -607,7 +616,7 @@ def _is_timeout(exc: BaseException) -> bool:
     reason = getattr(exc, "reason", None)
     return isinstance(reason, TimeoutError)
 
-def _run_decision_turn(seat_info: dict, d: dict, producir_voto, turn: str) -> None:
+def _run_decision_turn(seat_info: dict, d: dict, producir_voto, turn: str, stats: dict | None = None) -> None:
     """Un turno de decisión, síncrono: journal inline → voto (lo produce
     `producir_voto(journal)`) → registro con la misma lógica que
     cast_position. La conexión NO se sostiene abierta mientras el productor
@@ -615,6 +624,10 @@ def _run_decision_turn(seat_info: dict, d: dict, producir_voto, turn: str) -> No
     conexión tomada, se acuartela un checkout de Postgres todo ese tiempo).
     Los fallos se guardan en el dossier y requieren reintento explícito."""
     start = time.monotonic()
+    # `stats` lo llena el productor (prompt_chars, output_chars, memory_chars):
+    # es lo que metrics.py convierte en tokens por turno. Sin esto sólo
+    # sabíamos cuánto tardaba una cabeza, no cuánto leía ni cuánto escribía.
+    stats = stats if stats is not None else {}
     meta = {
         "thread": d["thread"], "author": seat_info["seat"], "token": _token(d["thread"], seat_info["seat"]),
         "decision_id": d["id"], "round": d["round"], "turn": turn,
@@ -623,6 +636,7 @@ def _run_decision_turn(seat_info: dict, d: dict, producir_voto, turn: str) -> No
         with connect() as conn:
             journal = _journal_inline(conn, d["thread"])
         vote = producir_voto(journal)
+        meta.update(stats)
         with connect() as conn:
             with conn.transaction():
                 board.record_position(
@@ -640,6 +654,7 @@ def _run_decision_turn(seat_info: dict, d: dict, producir_voto, turn: str) -> No
     except Exception as exc:
         log.error("turno %s de %s en %s falló: %s", turn, seat_info["seat"], d["thread"], exc)
         reason = 'Tiempo agotado esperando la respuesta.' if _is_timeout(exc) else str(exc)
+        meta.update(stats)
         _report_turn_error(meta, reason)
         event("trigger_done", rc=1, error=reason, timed_out=_is_timeout(exc),
               duration_s=round(time.monotonic() - start, 1), **meta)
@@ -648,11 +663,16 @@ def _run_decision_turn(seat_info: dict, d: dict, producir_voto, turn: str) -> No
 def _run_api_turn(seat_info: dict, d: dict, memory: str | None = None) -> None:
     """Turno de asiento API: prompt + chat + parseo del tag POSITION contra
     el endpoint OpenAI-compatible."""
-    _run_decision_turn(
-        seat_info, d,
-        lambda journal: apihead.run_turn(seat_info, d, journal, memory=memory),
-        "api",
-    )
+    stats = {"memory_chars": len(memory or "")}
+
+    def producir_voto(journal):
+        system, user = apihead.build_api_prompt(seat_info["seat"], d, journal, memory=memory)
+        stats["prompt_chars"] = len(system) + len(user)
+        vote = apihead.run_turn(seat_info, d, journal, memory=memory)
+        stats["output_chars"] = len(vote.get("body") or "")
+        return vote
+
+    _run_decision_turn(seat_info, d, producir_voto, "api", stats)
 
 
 def _run_api_turn_bg(seat_info: dict, d: dict, memory: str | None = None) -> None:
@@ -680,7 +700,7 @@ def fire_api_turn(seat_info: dict, d: dict, memory: str | None = None) -> bool:
 
 # ---------------------------------------------------------------- turnos de chat libre
 
-def _run_chat_turn(seat_info: dict, thread: str, producir_texto, turn: str) -> None:
+def _run_chat_turn(seat_info: dict, thread: str, producir_texto, turn: str, stats: dict | None = None) -> None:
     """Un turno de chat libre, síncrono: journal inline → respuesta (la
     produce `producir_texto(journal)`) → UN mensaje kind='respuesta'. Mismo
     contrato que el disparo CLI (un mensaje por turno). Si algo falla el
@@ -689,11 +709,14 @@ def _run_chat_turn(seat_info: dict, thread: str, producir_texto, turn: str) -> N
     'veredicto' en chat — sin decisión no tienen posición que votar: el
     humano cierra el chat con 'arbitraje' o el tope corta."""
     start = time.monotonic()
+    stats = stats if stats is not None else {}
     meta = {"thread": thread, "author": seat_info["seat"], "token": _token(thread), "turn": turn}
     try:
         with connect() as conn:
             journal = _journal_inline(conn, thread)
         text = producir_texto(journal)
+        stats.setdefault("output_chars", len(text or ""))
+        meta.update(stats)
         with connect() as conn:
             conn.execute(
                 """
@@ -714,9 +737,14 @@ def _run_chat_turn(seat_info: dict, thread: str, producir_texto, turn: str) -> N
 
 def _run_api_chat_turn(seat_info: dict, thread: str, cwd: str | None = None) -> None:
     """Turno de chat libre de un asiento API (HTTP contra el endpoint)."""
-    _run_chat_turn(seat_info, thread,
-                   lambda journal: apihead.run_chat_turn(seat_info, journal, cwd, thread),
-                   "free-api")
+    stats = {}
+
+    def producir_texto(journal):
+        system, user = apihead.build_chat_prompt(seat_info["seat"], journal, cwd, thread)
+        stats["prompt_chars"] = len(system) + len(user)
+        return apihead.run_chat_turn(seat_info, journal, cwd, thread)
+
+    _run_chat_turn(seat_info, thread, producir_texto, "free-api", stats)
 
 
 def _run_api_chat_turn_bg(seat_info: dict, thread: str, cwd: str | None = None) -> None:
@@ -829,6 +857,8 @@ def _run_cli_inline_turn(seat_info: dict, d: dict, cwd: str, memory: str | None 
     parsea el tag POSITION: de su salida; la salida completa queda como
     body del voto. El proceso puede investigar el repo con sus propias
     herramientas de lectura aunque no pueda votar por MCP."""
+    stats = {"memory_chars": len(memory or "")}
+
     def producir_voto(journal):
         if seat_info.get("tools"):
             # cabeza con herramientas propias (codex exec y sandbox): misma
@@ -837,14 +867,16 @@ def _run_cli_inline_turn(seat_info: dict, d: dict, cwd: str, memory: str | None 
         else:
             system, user = apihead.build_api_prompt(seat_info["seat"], d, journal, memory=memory)
             prompt = f"{system}\n\n{user}"
+        stats["prompt_chars"] = len(prompt)
         text = _run_cli_inline(
             seat_info, prompt, cwd,
             seat_info.get("timeout_secs", AGENT_TIMEOUT_SECS),
             token=_token(d["thread"], seat_info["seat"]),
         )
+        stats["output_chars"] = len(text)
         return apihead.parse_vote(apihead.strip_echo(text, prompt))
 
-    _run_decision_turn(seat_info, d, producir_voto, "cli-inline")
+    _run_decision_turn(seat_info, d, producir_voto, "cli-inline", stats)
 
 
 def _run_cli_inline_turn_bg(seat_info: dict, d: dict, cwd: str, memory: str | None = None) -> None:
@@ -872,17 +904,21 @@ def _run_cli_inline_chat_turn(seat_info: dict, thread: str, cwd: str) -> None:
     """Turno de chat libre de una cabeza journal-inline: prompt de charla,
     stdout completo posteado como UN mensaje 'respuesta' (igual contrato
     que el turno API de chat)."""
+    stats = {}
+
     def producir_texto(journal):
         system, user = apihead.build_chat_prompt(seat_info["seat"], journal, cwd, thread)
         prompt = f"{system}\n\n{user}"
+        stats["prompt_chars"] = len(prompt)
         text = _run_cli_inline(
             seat_info, prompt, cwd,
             seat_info.get("timeout_secs", AGENT_TIMEOUT_SECS),
             token=_token(thread),
         )
+        stats["output_chars"] = len(text)
         return apihead.strip_echo(text, prompt).strip()
 
-    _run_chat_turn(seat_info, thread, producir_texto, "free-inline")
+    _run_chat_turn(seat_info, thread, producir_texto, "free-inline", stats)
 
 
 def _run_cli_inline_chat_turn_bg(seat_info: dict, thread: str, cwd: str) -> None:
@@ -1024,6 +1060,12 @@ def fire_decision_turns(conn, state: dict, d: dict) -> None:
     # largo dejaba el tema de la decisión fuera de la consulta léxica.
     memoria, fuentes = memory_ctx.memoria_con_fuentes(d['title'] + ' ' + followup, d.get('artifact'), thread=d['thread'])
     _registrar_fuentes_de_memoria(conn, d, fuentes)
+    if d['round'] == 1 and d.get('artifact'):
+        # Mapa del repo desde el grafo de código: lectura dirigida en vez de
+        # exploración. Sólo en la ronda 1; después las cabezas ya saben dónde mirar.
+        brief = memory_ctx.repo_brief(d['artifact'])
+        if brief:
+            memoria = (brief + '\n\n' + memoria).strip()
 
     for turn in turns:
         if turn['seat'] in turn_errors.active(d):
@@ -1280,9 +1322,11 @@ def _synthesis_invoke(seat, prompt):
           author=seat['seat'], turn='synthesis')
     error = None
     timed_out = False
+    produced = None
     try:
         if seat.get('type') == 'api':
-            return apihead.chat(seat['base_url'], seat['model'], apihead._persona(seat['seat']), prompt, 120)
+            produced = apihead.chat(seat['base_url'], seat['model'], apihead._persona(seat['seat']), prompt, 120)
+            return produced
         # cwd fijo por asiento, no un tempdir por invocación: Claude Code
         # registra cada cwd nuevo como proyecto en ~/.claude/projects aunque
         # corra sin persistencia, y cada síntesis dejaba un directorio más.
@@ -1296,8 +1340,10 @@ def _synthesis_invoke(seat, prompt):
                     config['args'] += ['--sandbox', 'read-only']
                 config['args'] += ['--output-last-message', str(final)]
                 _run_cli_inline(config, prompt, cwd, 120, token=token)
-                return final.read_text(encoding='utf-8')
-            return _run_cli_inline(config, prompt, cwd, 120, token=token)
+                produced = final.read_text(encoding='utf-8')
+                return produced
+            produced = _run_cli_inline(config, prompt, cwd, 120, token=token)
+            return produced
         out = Path(cwd) / 'result.txt'
         with out.open('wb') as stream:
             proc = subprocess.Popen([seat['bin'], *seat.get('args', []), prompt], cwd=cwd,
@@ -1312,14 +1358,16 @@ def _synthesis_invoke(seat, prompt):
                 _kill_tree(proc)
                 proc.wait()
                 raise
-        return out.read_text(encoding='utf-8', errors='replace')
+        produced = out.read_text(encoding='utf-8', errors='replace')
+        return produced
     except Exception as exc:
         error = str(exc)
         timed_out = _is_timeout(exc)
         raise
     finally:
         event('trigger_done', rc=1 if error else 0, error=error,
-              timed_out=timed_out,
+              timed_out=timed_out, prompt_chars=len(prompt),
+              output_chars=len(produced) if produced is not None else None,
               duration_s=round(time.monotonic() - started, 1), token=token,
               thread='synthesis', author=seat['seat'], turn='synthesis')
         with _inflight_lock:

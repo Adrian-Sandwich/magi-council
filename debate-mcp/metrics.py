@@ -26,6 +26,7 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 EVENTS_PATH = BASE_DIR / "logs" / "trigger_events.jsonl"
+CHARS_PER_TOKEN = 4  # aproximación; los CLI no exponen el conteo real
 
 
 def _percentile(values: list[float], q: float) -> float:
@@ -76,7 +77,8 @@ def summarize(events: list[dict]) -> dict:
       al último cierre de esa ronda), que es lo que espera el operador.
     - spawn_failures: disparos que ni arrancaron, por causa.
     """
-    by_seat: dict[tuple, dict] = defaultdict(lambda: {"durations": [], "errors": 0, "timeouts": 0})
+    by_seat: dict[tuple, dict] = defaultdict(lambda: {"durations": [], "errors": 0, "timeouts": 0,
+                                                       "prompt_chars": [], "output_chars": [], "memory_chars": []})
     round_bounds: dict[tuple, dict] = {}
     round_secs: list[float] = []
     spawn_failures: dict[str, int] = defaultdict(int)
@@ -101,6 +103,9 @@ def summarize(events: list[dict]) -> dict:
         elif kind == "trigger_done":
             seat = by_seat[(e.get("author") or "?", e.get("turn") or "?")]
             seat["durations"].append(float(e.get("duration_s") or 0))
+            for field in ("prompt_chars", "output_chars", "memory_chars"):  # no pisar `key` (decisión, ronda)
+                if isinstance(e.get(field), (int, float)):
+                    seat[field].append(float(e[field]))
             if e.get("timed_out"):
                 seat["timeouts"] += 1
             if e.get("rc") not in (0, None) or e.get("timed_out"):
@@ -114,6 +119,15 @@ def summarize(events: list[dict]) -> dict:
     seats = []
     for (author, turn), data in sorted(by_seat.items(), key=lambda kv: -len(kv[1]["durations"])):
         d = data["durations"]
+        # Tokens aproximados (4 caracteres por token en español/código). Lo
+        # que la cabeza lee por su cuenta con herramientas no está: sólo el
+        # prompt que le mandamos y lo que escribió.
+        tokens = {}
+        for key, name in (("prompt_chars", "in"), ("output_chars", "out"), ("memory_chars", "memory")):
+            values = data[key]
+            tokens[f"{name}_tokens_p50"] = round(statistics.median(values) / CHARS_PER_TOKEN) if values else None
+            tokens[f"{name}_tokens_total"] = round(sum(values) / CHARS_PER_TOKEN) if values else None
+            tokens[f"{name}_measured"] = len(values)
         seats.append({
             "seat": author, "turn": turn, "n": len(d),
             "p50_s": round(statistics.median(d), 1),
@@ -121,6 +135,7 @@ def summarize(events: list[dict]) -> dict:
             "max_s": round(max(d), 1),
             "errors": data["errors"], "timeouts": data["timeouts"],
             "error_rate": round(data["errors"] / len(d), 3),
+            **tokens,
         })
     for bounds in round_bounds.values():
         close_burst(bounds)
@@ -131,6 +146,10 @@ def summarize(events: list[dict]) -> dict:
         "max_s": round(max(round_secs), 1) if round_secs else None,
     }
     return {"seats": seats, "rounds": rounds, "spawn_failures": dict(spawn_failures)}
+
+
+def _fmt_num(v) -> str:
+    return "-" if v is None else f"{v:,}"
 
 
 def _fmt_secs(value) -> str:
@@ -144,13 +163,21 @@ def render(summary: dict, days: int) -> str:
     if not summary["seats"]:
         lines.append("  sin turnos registrados en el período")
         return "\n".join(lines)
-    lines.append(f"  {'asiento':<10} {'turno':<11} {'n':>4} {'p50':>7} {'p95':>7} {'max':>7} {'err':>5} {'t/o':>4}")
+    lines.append(f"  {'asiento':<10} {'turno':<11} {'n':>4} {'p50':>7} {'p95':>7} {'max':>7} {'err':>5} {'t/o':>4} "
+                 f"{'in≈tok':>7} {'out≈tok':>8} {'memoria':>8}")
+    total_in = total_out = 0
     for s in summary["seats"]:
+        total_in += s.get("in_tokens_total") or 0
+        total_out += s.get("out_tokens_total") or 0
         lines.append(
             f"  {s['seat']:<10} {s['turn']:<11} {s['n']:>4} {_fmt_secs(s['p50_s']):>7} "
             f"{_fmt_secs(s['p95_s']):>7} {_fmt_secs(s['max_s']):>7} "
-            f"{s['errors']:>3} {s['error_rate'] * 100:>3.0f}% {s['timeouts']:>4}"
+            f"{s['errors']:>3} {s['error_rate'] * 100:>3.0f}% {s['timeouts']:>4} "
+            f"{_fmt_num(s.get('in_tokens_p50')):>7} {_fmt_num(s.get('out_tokens_p50')):>8} {_fmt_num(s.get('memory_tokens_p50')):>8}"
         )
+    if total_in or total_out:
+        lines.append(f"  tokens aproximados en el período: {total_in:,} de entrada / {total_out:,} de salida "
+                     f"(4 chars/token; no incluye lo que las cabezas leen con sus herramientas)")
     r = summary["rounds"]
     if r["n"]:
         lines.append(

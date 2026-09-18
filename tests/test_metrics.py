@@ -49,8 +49,10 @@ def test_resume_por_asiento_ronda_y_fallos_de_arranque(tmp_path):
     assert melchior["p50_s"] == 150.0 and melchior["max_s"] == 900.0
     assert melchior["errors"] == 2 and melchior["timeouts"] == 1
     casper = next(s for s in summary["seats"] if s["seat"] == "casper")
-    assert casper == {"seat": "casper", "turn": "cli-inline", "n": 1, "p50_s": 40.0, "p95_s": 40.0,
-                      "max_s": 40.0, "errors": 0, "timeouts": 0, "error_rate": 0.0}
+    expected = {"seat": "casper", "turn": "cli-inline", "n": 1, "p50_s": 40.0, "p95_s": 40.0,
+                "max_s": 40.0, "errors": 0, "timeouts": 0, "error_rate": 0.0}
+    assert {k: casper[k] for k in expected} == expected
+    assert casper["in_tokens_p50"] is None, "sin prompt_chars en el evento no se inventa un conteo"
     # la ronda de #7 va del primer disparo al último cierre: 150s de pared
     assert summary["rounds"] == {"n": 1, "p50_s": 150.0, "p95_s": 150.0, "max_s": 150.0}
     assert summary["spawn_failures"] == {"asiento 'casper' sin binario": 2}
@@ -89,3 +91,24 @@ def test_render_y_salida_json(tmp_path, capsys):
 def test_sin_eventos_no_revienta(tmp_path, capsys):
     assert metrics.main(["--events", str(tmp_path / "nada.jsonl")]) == 0
     assert "sin turnos" in capsys.readouterr().out
+
+
+def test_tokens_aproximados_por_asiento_y_totales(tmp_path, capsys):
+    events = tmp_path / "trigger_events.jsonl"
+    now = datetime.now(timezone.utc).isoformat()
+    _write(events, [
+        {"ts": now, "event": "trigger_done", "author": "casper", "turn": "cli-inline", "rc": 0, "duration_s": 30.0,
+         "prompt_chars": 16000, "output_chars": 8000, "memory_chars": 6400},
+        {"ts": now, "event": "trigger_done", "author": "casper", "turn": "cli-inline", "rc": 0, "duration_s": 30.0,
+         "prompt_chars": 8000, "output_chars": 4000, "memory_chars": 0},
+        {"ts": now, "event": "trigger_done", "author": "melchior", "turn": "answer", "rc": 0, "duration_s": 90.0},
+    ])
+    summary = metrics.summarize(metrics.read_events(events))
+    casper = next(s for s in summary["seats"] if s["seat"] == "casper")
+    assert casper["in_tokens_p50"] == 3000 and casper["out_tokens_p50"] == 1500 and casper["memory_tokens_p50"] == 800
+    assert casper["in_tokens_total"] == 6000 and casper["in_measured"] == 2
+    melchior = next(s for s in summary["seats"] if s["seat"] == "melchior")
+    assert melchior["in_tokens_p50"] is None and melchior["in_measured"] == 0
+    assert metrics.main(["--events", str(events)]) == 0
+    out = capsys.readouterr().out
+    assert "6,000 de entrada / 3,000 de salida" in out and "in≈tok" in out
