@@ -30,7 +30,9 @@ def test_followup_gets_a_fresh_bounded_budget():
     assert decision.content_resolution(6,SEATS,reviews(False),round_start=4) == 'budget_exhausted'
     d={'status':'open','round':4,'heads':SEATS,'protocol':'adaptive','minority_report':{'round_budget_start':4}}
     positions=[{'head':s,'round':4,'position':'info'} for s in SEATS]
-    assert decision.advance(d,positions)['action'] == 'next_round'
+    # sin ronda de contraste forzada: el seguimiento va directo a evaluar la
+    # respuesta común; una objeción real abre la ronda siguiente
+    assert decision.advance(d,positions)['action'] == 'assess_content'
 
 
 def cast_info_round(pg,identifier):

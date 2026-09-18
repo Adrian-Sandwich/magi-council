@@ -20,9 +20,13 @@ POSITIONS = ("yes", "no", "conditional", "info")
 PROTOCOLS = ("vote", "critique", "adaptive")
 MAX_ROUNDS = 3
 # Las preguntas conceptuales no tienen un artefacto que aprobar. Una primera
-# ronda de tres `info` es sólo el primer encuadre; obligamos una ronda de
-# contraste antes de presentar una respuesta como consenso del consejo.
-INFO_MIN_ROUNDS = 2
+# ronda de tres `info` va directo a la evaluación de contenido: el editor
+# redacta una respuesta común y cada cabeza decide si la acepta; si alguna
+# objeta, ESA objeción abre la ronda siguiente (content_resolution). Hasta el
+# 2026-09-18 se forzaba una segunda ronda de contraste antes de evaluar: eran
+# ~2.5 min y ~12k tokens extra por pregunta, también cuando las tres respuestas
+# ya coincidían. INFO_MIN_ROUNDS > 1 restaura ese comportamiento.
+INFO_MIN_ROUNDS = 1
 
 # una sola cabeza (modo degradado): su voto manda, pero con confidence mínima —
 # no es un veredicto MAGI, es el mejor esfuerzo disponible.

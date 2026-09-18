@@ -173,7 +173,13 @@ por aporte) y tres intervenciones humanas recientes. La síntesis puede omitir
 matices fuera de ese contexto. El cierre INFO ahora espera aceptación explícita
 del contenido de una misma respuesta; una revisión fiel puede rechazar sus
 conclusiones. Las objeciones alimentan la siguiente ronda, hasta tres rondas por
-continuación humana. Al agotarse el presupuesto, o faltar una revisión válida,
+continuación humana. Desde el 2026-09-18 tres votos `info` en la primera ronda
+van directo a esta evaluación (antes se forzaba una segunda ronda de contraste,
+~2.5 min y ~12k tokens por pregunta también cuando las respuestas ya
+coincidían; `INFO_MIN_ROUNDS` en `decision.py` la restaura). En las rondas 2+ las
+posiciones de rondas anteriores llegan a cada cabeza resumidas a cabeza + cola
+(900 + 400 caracteres; el voto y las condiciones sobreviven), no completas: eran
+hasta 18k caracteres releídos por cabeza en cada ronda. Al agotarse el presupuesto, o faltar una revisión válida,
 se entrega una respuesta provisional. Es acuerdo declarado por los modelos,
 no una prueba de verdad factual ni una medida infalible de calidad.
 

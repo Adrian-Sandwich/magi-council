@@ -155,11 +155,15 @@ def test_adaptive_cierra_directo_con_mayoria():
     assert act["action"] == "close" and act["ruling"] == "yes"
 
 
-def test_info_unanime_exige_una_ronda_de_contraste():
+def test_info_unanime_va_directo_a_evaluar_el_contenido(monkeypatch):
+    """La ronda de contraste forzada costaba ~2.5 min y ~12k tokens también
+    cuando las tres respuestas coincidían; ahora la abre sólo una objeción
+    real en la evaluación de contenido. INFO_MIN_ROUNDS=2 restaura lo anterior."""
     d = mk_decision(round=1, protocol="adaptive")
     first = [mk_pos(s, "info", round=1) for s in SEATS]
-    act = decision.advance(d, first)
-    assert act["action"] == "next_round"
+    assert decision.advance(d, first)["action"] == "assess_content"
+    monkeypatch.setattr(decision, "INFO_MIN_ROUNDS", 2)
+    assert decision.advance(d, first)["action"] == "next_round"
     assert decision.advance({**d, "round": 2}, first + [
         mk_pos(s, "info", round=2) for s in SEATS
     ])["action"] == "assess_content"

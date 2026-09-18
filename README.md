@@ -140,8 +140,10 @@ them see the journal and the **memory graph**) and vote in parallel:
   **Continue with context** for another round or **Close with my ruling** to
   close it with your decision. Type the context or ruling and press send.
 
-Unanimous `info` votes receive a contrast round, then the heads evaluate one
-shared answer. Editorial fidelity and acceptance of its content are separate.
+Unanimous `info` votes go straight to the evaluation of one shared answer
+(until 2026-09-18 a contrast round was forced first, costing ~2.5 minutes
+and ~12k tokens per question even when the three answers already agreed;
+`INFO_MIN_ROUNDS` in `decision.py` restores it). Editorial fidelity and acceptance of its content are separate.
 Substantive objections feed another debate round, up to three rounds per human
 continuation. At the limit, or if a reviewer fails, the answer is explicitly
 provisional; matching `INFO` votes alone never establish content consensus.
