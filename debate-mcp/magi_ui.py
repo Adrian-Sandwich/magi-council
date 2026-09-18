@@ -709,8 +709,9 @@ class Handler(BaseHTTPRequestHandler):
                         else:
                             result = board.human_message(conn, d["thread"], body)
                         if action == "execute":
-                            result = {**result, "kind": "decision", "decision_id": d["id"],
-                                      "action": "execution_requested"}
+                            result = {**result, "kind": "decision",
+                                      "decision_id": result.get("decision_id", d["id"]),
+                                      "action": result.get("action", "execution_requested")}
                         elif action == "followup":
                             result = {**result, "kind": "decision", "decision_id": d["id"], "action": "follow_up"}
                         elif result.get("reopened_decision"):

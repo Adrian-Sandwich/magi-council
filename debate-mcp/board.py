@@ -238,6 +238,7 @@ _RE_EJECUTAR = re.compile(
     r"^\s*(?:pues\s+|bueno\s+|entonces\s+|ok[,;:]?\s+)?"
     r"(?:arr[eé]gl(?:ar|alo|ala|enlo)|implement(?:ar|a|alo|enlo)|hazlo|h[aá]ganlo|"
     r"ejecut(?:ar|a|alo|enlo)|aplic(?:ar|a|alo|enlo)|procede|"
+    r"apruebo\s+(?:tu\s+plan|el\s+plan|ese\s+plan|la\s+propuesta)|"
     r"vamos\s+con\s+(?:eso|los\s+cambios|tu\s+plan|el\s+plan|ese\s+plan|tu\s+propuesta|la\s+propuesta)|"
     r"sigamos\s+con\s+(?:eso|los\s+cambios|tu\s+plan|el\s+plan)|"
     r"adelante\s+con\s+(?:el\s+plan|tu\s+plan|eso)|haz\s+lo\s+que\s+propones)\b",
@@ -256,7 +257,7 @@ def is_execution_request(body: str) -> bool:
     def resembles(word, choices):
         return any(SequenceMatcher(None, word, choice).ratio() >= .78 for choice in choices)
     intent = any(resembles(w, ('vamos', 'sigamos', 'implementa', 'implementar',
-                               'arreglalo', 'ejecuta', 'aplica')) for w in words)
+                               'arreglalo', 'ejecuta', 'aplica', 'apruebo')) for w in words)
     target = any(resembles(w, ('cambios', 'plan', 'propuesta', 'eso')) for w in words)
     return intent and target
 
@@ -395,6 +396,67 @@ def execute_approved_decision(conn, decision_id: int, body: str) -> dict:
         raise ValueError(f"decisión {decision_id} todavía está '{d['status']}'")
     if d.get("ruling") not in ("yes", "conditional"):
         raise ValueError("sólo una decisión aprobada puede pasar a ejecución")
+    # Una revisión aprobada no es un segundo plan independiente. Si pertenece
+    # a una ejecución que sigue abierta, sus condiciones vuelven al dossier
+    # original para que el mismo worktree se corrija y se revise de nuevo.
+    parent = conn.execute(
+        """
+        SELECT * FROM decisions
+        WHERE status = 'executing'
+          AND minority_report->'execution'->>'review_id' = %s
+        ORDER BY id DESC LIMIT 1 FOR UPDATE
+        """,
+        (str(decision_id),),
+    ).fetchone()
+    if parent is not None:
+        review_report = d.get("minority_report") or {}
+        conditions = list(review_report.get("approved_conditions") or [])
+        synthesis = (review_report.get("synthesis") or {}).get("answer")
+        plan = synthesis or (
+            f"Aplicar las condiciones aprobadas por la revisión #{decision_id}."
+            + ("\n- " + "\n- ".join(conditions) if conditions else "")
+        )
+        row = conn.execute(
+            """
+            INSERT INTO messages (thread, author, kind, body, artifact)
+            VALUES (%s, 'adrian', 'contexto', %s, NULL)
+            RETURNING id
+            """,
+            (d["thread"], body),
+        ).fetchone()
+        patch = {
+            "execution_state": "pending",
+            "execution_requested": True,
+            "execution_activity": None,
+            "approved_plan": plan,
+            "approved_conditions": conditions,
+            "correction_review_id": decision_id,
+        }
+        conn.execute(
+            """
+            UPDATE decisions
+            SET minority_report = (COALESCE(minority_report, '{}'::jsonb)
+                                   - 'execution_error') || %s::jsonb
+            WHERE id = %s
+            """,
+            (Json(patch), parent["id"]),
+        )
+        notice = (
+            f"CORRECCIONES SOLICITADAS — las condiciones de la revisión "
+            f"#{decision_id} vuelven a la ejecución #{parent['id']} en su "
+            "mismo worktree; al terminar se abrirá una revisión nueva."
+        )
+        for thread in dict.fromkeys((d["thread"], parent["thread"])):
+            conn.execute(
+                """
+                INSERT INTO messages (thread, author, kind, body, artifact)
+                VALUES (%s, 'magi', 'resultado', %s, NULL)
+                """,
+                (thread, notice),
+            )
+        return {"id": row["id"], "decision_id": parent["id"],
+                "review_id": decision_id, "thread": parent["thread"],
+                "action": "corrections_requested"}
     row = conn.execute(
         """
         INSERT INTO messages (thread, author, kind, body, artifact)

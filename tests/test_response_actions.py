@@ -45,7 +45,7 @@ def test_closed_follow_up_reopens_same_dossier():
 @pytest.mark.parametrize("text", [
     "pues arréglalo", "vamos con tu plan", "adelante con el plan",
     "haz lo que propones", "aplica la propuesta", "ok sigamos con eso",
-    "ok vmaos con los camios",
+    "ok vmaos con los camios", "apruebo tu plan",
 ])
 def test_execution_intent_understands_natural_followups(text):
     assert board.is_execution_request(text)
@@ -56,6 +56,7 @@ def test_execute_approved_decision_evolves_same_dossier():
     conn.execute.return_value.fetchone.side_effect = [
         {"id": 4, "thread": "d4", "status": "closed", "round": 3,
          "ruling": "conditional", "artifact": "C:/repo"},
+        None,
         {"id": 11},
         None,
         None,
@@ -67,3 +68,27 @@ def test_execute_approved_decision_evolves_same_dossier():
     assert any("status = 'executing'" in query and "production = true" in query for query in queries)
     assert any("EJECUCIÓN SOLICITADA" in call.args[1][1]
                for call in conn.execute.call_args_list if call.args[0].lstrip().startswith("INSERT INTO messages"))
+
+
+def test_execute_approved_review_resumes_parent_with_conditions():
+    conn = Mock()
+    review = {
+        "id": 30, "thread": "d30", "status": "closed", "round": 3,
+        "ruling": "conditional", "minority_report": {
+            "approved_conditions": ["move playtests", "add history test"],
+        },
+    }
+    parent = {"id": 28, "thread": "d28", "status": "executing"}
+    conn.execute.return_value.fetchone.side_effect = [review, parent, {"id": 81}]
+
+    result = board.execute_approved_decision(conn, 30, "apruebo tu plan")
+
+    assert result["action"] == "corrections_requested"
+    assert result["decision_id"] == 28
+    assert result["review_id"] == 30
+    update = next(call for call in conn.execute.call_args_list
+                  if "UPDATE decisions" in call.args[0])
+    patch = update.args[1][0].obj
+    assert patch["execution_state"] == "pending"
+    assert patch["approved_conditions"] == ["move playtests", "add history test"]
+    assert update.args[1][1] == 28

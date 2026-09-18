@@ -30,6 +30,8 @@ CONDITIONS_RE = re.compile(r"^\s*CONDITIONS\s*:\s*(.+)$", re.IGNORECASE | re.MUL
 
 DEFAULT_TIMEOUT_SECS = 600
 JOURNAL_LIMIT = 15        # mensajes del journal que entran al prompt
+JOURNAL_CHAR_LIMIT = 18_000
+JOURNAL_MESSAGE_CHAR_LIMIT = 6_000
 BODY_CHARS = 2000         # tope por mensaje inlineado
 
 

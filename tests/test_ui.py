@@ -550,6 +550,27 @@ def test_council_closed_approved_evolves_to_execution(ui_server_conn, monkeypatc
     assert calls == {"decision_id": 2, "body": "vamos con tu plan"}
 
 
+def test_council_review_execution_targets_original_decision(ui_server_conn, monkeypatch):
+    port, _, conn = ui_server_conn
+    conn.decisions = [_decision(30, status="closed", ruling="conditional")]
+    monkeypatch.setattr(
+        magi_ui.board, "execute_approved_decision",
+        lambda c, decision_id, body: {
+            "id": 78, "decision_id": 28, "review_id": decision_id,
+            "thread": "d28", "action": "corrections_requested",
+        },
+    )
+    response = _post(port, "/message", {
+        "mode": "council", "body": "apruebo tu plan", "decision_id": 30,
+        "action": "execute",
+    })
+    result = json.loads(response.read())
+    assert response.status == 201
+    assert result["action"] == "corrections_requested"
+    assert result["decision_id"] == 28
+    assert result["review_id"] == 30
+
+
 def test_council_con_stalemate_arbitra(ui_server_conn, monkeypatch):
     port, _, conn = ui_server_conn
     conn.decisions = [_decision(3, status="split", round=3)]

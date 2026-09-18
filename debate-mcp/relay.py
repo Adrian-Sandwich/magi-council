@@ -570,7 +570,30 @@ def _journal_inline(conn, thread: str) -> list[dict]:
         """,
         (thread, apihead.JOURNAL_LIMIT),
     ).fetchall()
-    return [dict(m) for m in reversed(rows)]
+    # JOURNAL_LIMIT evita una cantidad ilimitada de mensajes, pero las salidas
+    # de agentes con herramientas pueden medir decenas de KB cada una. Acotar
+    # también caracteres evita derribar CLIs nativos en rondas tardías. Se
+    # conserva primero la evidencia más reciente y una fracción del mensaje
+    # que cruza el límite, para no perder por completo su autor/contexto.
+    char_limit = getattr(apihead, "JOURNAL_CHAR_LIMIT", 18_000)
+    message_limit = getattr(apihead, "JOURNAL_MESSAGE_CHAR_LIMIT", 6_000)
+    kept = []
+    remaining = char_limit
+    for raw in rows:  # DESC: newest evidence wins
+        item = dict(raw)
+        body = item.get("body") or ""
+        if len(body) > message_limit:
+            body = body[:message_limit] + "\n[... mensaje acotado ...]"
+        if len(body) > remaining:
+            if remaining < 300:
+                break
+            body = body[:remaining] + "\n[... journal acotado ...]"
+        item["body"] = body
+        kept.append(item)
+        remaining -= len(body)
+        if remaining <= 0:
+            break
+    return list(reversed(kept))
 
 
 def _run_decision_turn(seat_info: dict, d: dict, producir_voto, turn: str) -> None:
@@ -637,7 +660,8 @@ def fire_api_turn(seat_info: dict, d: dict, memory: str | None = None) -> bool:
         "turno API %s (modelo %s) en decisión %s, ronda %s",
         seat_info["seat"], seat_info.get("model"), d["id"], d["round"],
     )
-    event("trigger_spawned", pid=None, thread=d["thread"], author=seat_info["seat"],
+    event("trigger_spawned", pid=None, token=_token(d["thread"], seat_info["seat"]),
+          thread=d["thread"], author=seat_info["seat"],
           decision_id=d["id"], round=d["round"], turn="api")
     threading.Thread(target=_run_api_turn_bg, args=(seat_info, d, memory), daemon=True).start()
     return True
@@ -809,7 +833,8 @@ def fire_cli_inline_turn(seat_info: dict, d: dict, cwd: str, memory: str | None 
         _inflight.add(_token(d["thread"], seat_info["seat"]))
     log.info("turno inline %s (%s) en decisión %s, ronda %s",
              seat_info["seat"], seat_info.get("name"), d["id"], d["round"])
-    event("trigger_spawned", pid=None, thread=d["thread"], author=seat_info["seat"],
+    event("trigger_spawned", pid=None, token=_token(d["thread"], seat_info["seat"]),
+          thread=d["thread"], author=seat_info["seat"],
           decision_id=d["id"], round=d["round"], turn="cli-inline")
     threading.Thread(target=_run_cli_inline_turn_bg, args=(seat_info, d, cwd, memory), daemon=True).start()
     return True
@@ -1200,7 +1225,10 @@ def _synthesis_invoke(seat, prompt):
                 config = dict(seat, args=list(seat.get('args', [])))
                 if 'exec' in config['args']:
                     final = Path(cwd) / 'final.txt'
-                    config['args'] += ['--skip-git-repo-check', '--sandbox', 'read-only', '--output-last-message', str(final)]
+                    config['args'] += ['--skip-git-repo-check']
+                    if '--sandbox' not in config['args']:
+                        config['args'] += ['--sandbox', 'read-only']
+                    config['args'] += ['--output-last-message', str(final)]
                     _run_cli_inline(config, prompt, cwd, 120, token=token)
                     return final.read_text(encoding='utf-8')
                 return _run_cli_inline(config, prompt, cwd, 120, token=token)

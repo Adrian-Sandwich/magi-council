@@ -442,7 +442,7 @@ function renderHistory() {
 // Qué va a pasar con el próximo Enter, en palabras. Es la respuesta a "no sé
 // qué hará mi mensaje": la UI anticipa la acción antes de que la escribas.
 function executionIntent(text) {
-  return /^\s*(?:(?:pues|bueno|entonces)\s+|ok[,;:]?\s+)?(?:arr[eé]gl(?:ar|alo|ala|enlo)|implement(?:ar|a|alo|enlo)|hazlo|h[aá]ganlo|ejecut(?:ar|a|alo|enlo)|aplic(?:ar|a|alo|enlo)|procede|vamos\s+con\s+(?:eso|los\s+cambios|tu\s+plan|el\s+plan|ese\s+plan|tu\s+propuesta|la\s+propuesta)|sigamos\s+con\s+(?:eso|los\s+cambios|tu\s+plan|el\s+plan)|adelante\s+con\s+(?:el\s+plan|tu\s+plan|eso)|haz\s+lo\s+que\s+propones)\b/i.test(text || "");
+  return /^\s*(?:(?:pues|bueno|entonces)\s+|ok[,;:]?\s+)?(?:arr[eé]gl(?:ar|alo|ala|enlo)|implement(?:ar|a|alo|enlo)|hazlo|h[aá]ganlo|ejecut(?:ar|a|alo|enlo)|aplic(?:ar|a|alo|enlo)|procede|apruebo\s+(?:tu\s+plan|el\s+plan|ese\s+plan|la\s+propuesta)|vamos\s+con\s+(?:eso|los\s+cambios|tu\s+plan|el\s+plan|ese\s+plan|tu\s+propuesta|la\s+propuesta)|sigamos\s+con\s+(?:eso|los\s+cambios|tu\s+plan|el\s+plan)|adelante\s+con\s+(?:el\s+plan|tu\s+plan|eso)|haz\s+lo\s+que\s+propones)\b/i.test(text || "");
 }
 
 function renderIntent(d) {
@@ -753,6 +753,9 @@ async function send(forceNew = false) {
       status.textContent = `decision #${data.decision_id} continued — the existing journal and memory stay attached`;
     } else if (data.action === "execution_requested") {
       status.textContent = `decision #${data.decision_id} is entering isolated execution — the diff will be reviewed before merge`;
+    } else if (data.action === "corrections_requested") {
+      focusedId = data.decision_id;
+      status.textContent = `review #${data.review_id} approved — corrections are executing in decision #${data.decision_id}`;
     } else {
       status.textContent = "sent — the council answers in turn";
     }

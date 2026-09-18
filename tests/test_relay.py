@@ -20,6 +20,7 @@ import json
 import os
 import sys
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -788,6 +789,43 @@ def test_cabeza_inline_con_tools_investiga_antes_de_votar(fired_magi, monkeypatc
     del seat_pasivo["tools"]
     relay._run_cli_inline_turn(seat_pasivo, d, cwd, memory=None)
     assert "INVESTIGÁ con tus herramientas" not in prompts["balthasar"]
+
+
+def test_journal_inline_caps_large_agent_outputs():
+    messages = [
+        {"author": "a", "kind": "posicion", "body": "A" * 9_000},
+        {"author": "b", "kind": "posicion", "body": "B" * 9_000},
+        {"author": "c", "kind": "posicion", "body": "C" * 9_000},
+        {"author": "adrian", "kind": "contexto", "body": "latest"},
+    ]
+
+    class JournalConn:
+        def execute(self, query, params=()):
+            return _Result(list(reversed(messages)))
+
+    journal = relay._journal_inline(JournalConn(), "d30")
+
+    assert journal[-1]["body"] == "latest"
+    assert sum(len(m["body"]) for m in journal) <= relay.apihead.JOURNAL_CHAR_LIMIT + 100
+    assert all(len(m["body"]) <= relay.apihead.JOURNAL_MESSAGE_CHAR_LIMIT + 40 for m in journal)
+
+
+def test_synthesis_does_not_duplicate_configured_sandbox(monkeypatch):
+    seen = {}
+
+    def fake_run(config, prompt, cwd, timeout, token=None):
+        seen["args"] = config["args"]
+        output = config["args"][config["args"].index("--output-last-message") + 1]
+        Path(output).write_text("synthesis ok", encoding="utf-8")
+        return ""
+
+    monkeypatch.setattr(relay, "_run_cli_inline", fake_run)
+    monkeypatch.setattr(relay, "event", lambda *a, **kw: None)
+    seat = {"seat": "balthasar", "type": "cli", "journal": "inline",
+            "bin": "codex", "args": ["exec", "--sandbox", "workspace-write"]}
+
+    assert relay._synthesis_invoke(seat, "compose") == "synthesis ok"
+    assert seen["args"].count("--sandbox") == 1
 
 
 # ------------------------------------------------- reintentos de disparo fallido
