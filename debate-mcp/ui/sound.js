@@ -119,13 +119,22 @@ const MagiSound = (() => {
       tone({f: 92, to: 46, at: .5, dur: .7, type: 'sawtooth', level: .42, attack: .03});
       noise({at: .68, dur: .5, level: .2, filterType: 'highpass', frequency: 3900});
     },
-    // Alerta de planta: sirena disonante sobre vibración grave.
+    // Alerta de planta (el consejo se trabó): dos pulsos ásperos y un relé,
+    // menos de un segundo. La sirena de 2.3 s cansaba y sonaba igual para
+    // un fallo que para un empate.
     attention() {
-      impact(0, .72);
-      tone({f: 47, to: 58, dur: 2.25, type: 'sawtooth', level: .55, attack: .12});
-      tone({f: 188, to: 132, at: .08, dur: .82, type: 'square', level: .44, attack: .025});
-      tone({f: 188, to: 132, at: 1.05, dur: .82, type: 'square', level: .44, attack: .025});
-      relay(.94, .65); relay(1.92, .65);
+      impact(0, .6);
+      tone({f: 188, to: 150, at: .05, dur: .3, type: 'square', level: .4, attack: .02});
+      tone({f: 188, to: 150, at: .45, dur: .3, type: 'square', level: .4, attack: .02});
+      relay(.8, .6);
+    },
+    // Fallo (ejecución rota, cabeza en ERROR, envío rechazado): descenso
+    // tonal y transitorio de desconexión, 300 ms. Distinto de la alerta
+    // para que se aprenda qué significa a la segunda vez.
+    failure() {
+      tone({f: 520, to: 360, dur: .09, type: 'square', level: .3, attack: .004});
+      tone({f: 360, to: 180, at: .1, dur: .18, type: 'sawtooth', level: .34, attack: .006});
+      noise({at: .22, dur: .06, level: .3, filterType: 'highpass', frequency: 2600});
     },
   };
   function play(kind) {

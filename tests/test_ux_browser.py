@@ -330,3 +330,36 @@ def test_auto_scroll_respeta_la_posicion_de_lectura(page):
     feed(page, data)
     assert conv.evaluate("el => el.scrollHeight - el.scrollTop - el.clientHeight") <= 1, \
         "en el fondo el scroll tiene que quedar pegado al final, con la línea de thinking a la vista"
+
+
+def test_vote_word_failure_cue_and_mobile_live_line(page):
+    """Guía NERV funcional: el color del polígono no es el único canal (la
+    palabra del voto va dentro), un fallo suena distinto de un empate, y en
+    móvil la línea viva se lee en la statusbar en vez de encogerse."""
+    page.locator("#sound-toggle").click()
+    page.evaluate("() => { window.cues = []; MagiSound.play = kind => window.cues.push(kind); }")
+    data = snapshot()
+    feed(page, data)
+    assert page.locator(".wise-man.melchior .vote-word").inner_text() == "PENDING"
+    data["decisions"][0]["seats"][0].update(voted=True, position="conditional")
+    data["decisions"][0]["seats"][1].update(error={"message": "Tiempo agotado"})
+    data["decisions"][0]["turn_errors"] = {"balthasar": {"message": "Tiempo agotado"}}
+    feed(page, data)
+    assert page.locator(".wise-man.melchior .vote-word").inner_text() == "CONDITIONAL"
+    assert page.locator(".wise-man.balthasar .vote-word").inner_text() == "ERROR"
+    assert page.evaluate("window.cues") == ["failure"], "una cabeza en ERROR suena a fallo, no a voto"
+    data["decisions"][0].update(status="executing", execution_state="failed")
+    feed(page, data)
+    assert page.evaluate("window.cues") == ["failure", "failure"]
+    data["decisions"][0].update(status="split", execution_state=None)
+    feed(page, data)
+    assert page.evaluate("window.cues") == ["failure", "failure", "attention"]
+
+    assert not page.locator(".statusbar .live-line").is_visible(), "en escritorio la línea viva va en el triángulo"
+    page.set_viewport_size({"width": 390, "height": 844})
+    assert page.locator(".statusbar .live-line").is_visible()
+    assert "WAITING FOR OPERATOR" in page.locator(".statusbar .live-line").inner_text()
+    assert not page.locator(".system-status .execution-script").is_visible()
+    size = page.locator(".magi").bounding_box()
+    assert abs(size["width"] - size["height"]) < 4, "en móvil el triángulo es cuadrado para que el texto crezca"
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")

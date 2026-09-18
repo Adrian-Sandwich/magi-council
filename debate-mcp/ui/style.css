@@ -158,7 +158,7 @@ body {
 }
 
 .magi>.system-status>.execution-script.idle {
-    color: #8e682f;
+    color: #a37a3a;
 }
 
 .magi>.system-status>.execution-script.live {
@@ -420,7 +420,7 @@ body {
 }
 
 .composer .composer-hint {
-    color: #7a5a2e;
+    color: #a37a3a;
     font-family: 'Lucida Console', monospace;
     font-size: 11px;
     margin-top: 4px;
@@ -558,7 +558,7 @@ body {
 }
 
 #conversation .welcome {
-    color: #7a5a2e;
+    color: #a37a3a;
     padding: 12px 2px;
     line-height: 1.6;
 }
@@ -667,6 +667,7 @@ button:disabled { opacity: .45; cursor: default; }
 .stalemate-actions button[aria-pressed="true"] { background: #ff8d00; color: black; }
 #history { line-height: 2; }
 #history a { display: inline-block; padding: 6px; }
+.statusbar .live-line { display: none; }
 dialog.modal { position: fixed; inset: 0; margin: auto; width: min(800px, 92vw); max-width: 92vw; max-height: 85vh; height: auto; color: #e6d3b7; overflow-y: auto; }
 dialog.modal:not([open]) { display: none; }
 dialog::backdrop { background: #000b; }
@@ -680,10 +681,34 @@ dialog::backdrop { background: #000b; }
 }
 .magi>.wise-man.executor-active>.inner { animation: executor-signal .72s infinite step-end; }
 .magi>.wise-man.executor-active { box-shadow: 0 0 18px var(--executor-color); }
+/* La palabra del voto dentro del polígono: el color nunca es el único canal
+ * (la guía NERV funcional y WCAG 1.4.1). El nombre conserva la geometría
+ * original; la segunda línea es mono, pequeña pero legible. */
+.magi>.wise-man>.inner { flex-direction: column; gap: .4cqh; }
+.magi>.wise-man>.inner>.vote-word { font-family: 'Lucida Console', monospace; font-size: 2.6cqh; font-weight: normal; letter-spacing: .12em; opacity: .9; }
+/* Objetivos táctiles de 44 px (WCAG 2.5.8) sin cambiar la apariencia con ratón. */
+@media (pointer: coarse) {
+  button, .fs-panel button, .memory-feedback button, .composer .stalemate-actions button, .composer .modes button { min-height: 44px; }
+  .fs-panel .fs-list .dir { padding: 12px 10px; }
+  #history a { padding: 12px 8px; }
+}
 @media (prefers-reduced-motion: reduce) { .flicker, .thinking-line, .thinking-tag, .executor-active > .inner { animation: none; } }
 @media (max-width: 600px) {
   body { margin: 5px; }
   .system { padding: 10px; }
+  /* Repriorizar, no miniaturizar: el triángulo cuadrado duplica las unidades
+   * cqh (el texto de 5 px pasa a ~10 px) y la línea de actividad viva se muda
+   * a la statusbar, donde se lee. */
+  .magi { aspect-ratio: 1 / 1; overflow: hidden; }
+  .magi>.system-status>.execution-script { display: none; }
+  .magi>.header>span { transform: none; font-size: 4cqh; }
+  /* cuadrado = cqh el doble: las fuentes fijadas para 2:1 se recortan */
+  .magi>.title { font-size: 7cqh; }
+  .magi>.system-status>div, .magi>.system-status>div:first-child { font-size: 2.6cqh; transform: none; }
+  .magi>.response>.inner { font-size: 3cqh; padding: 2px 6px; }
+  .magi>.wise-man>.inner { font-size: 3.6cqh; }
+  .magi>.wise-man>.inner>.vote-word { font-size: 2.4cqh; }
+  .statusbar .live-line { display: block; color: #52e691; margin-top: 4px; }
   .console-toolbar { gap: 9px; }
   .console-toolbar strong { width: 100%; }
   .decision-actions { float: none; margin-top: 10px; }

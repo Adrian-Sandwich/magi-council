@@ -84,6 +84,44 @@ function thinkingSeats(d) {
 
 // ------------------------------------------------------------- magi
 
+// Palabra del voto dentro del polígono: el color del polígono nunca es el
+// único canal (guía NERV funcional; WCAG 1.4.1).
+const VOTE_WORDS = {yes: "YES", no: "NO", conditional: "CONDITIONAL", info: "INFO"};
+
+// La línea viva bajo ADAPTIVE · ROUND. La misma frase va dentro del
+// triángulo en escritorio y a la statusbar en móvil, donde el triángulo
+// no tiene altura para que se lea.
+function liveStatusLine(d) {
+  const activeExecution = d?.status === "executing" ? d.execution_activity : null;
+  const activeSeat = d?.seats?.find(seat => seat.activity);
+  const synthesis = d?.synthesis;
+  if (activeExecution) {
+    const elapsed = activeExecution.started_at
+      ? Math.max(0, Math.round((Date.now() - Date.parse(activeExecution.started_at)) / 1000)) : 0;
+    const phases = ["READING APPROVED PLAN", "INSPECTING ISOLATED WORKTREE", "APPLYING AND VERIFYING CHANGES"];
+    const phase = activeExecution.phase || phases[Math.floor(elapsed / 8) % phases.length];
+    return `▸ ${String(activeExecution.seat || "executor").toUpperCase()}: ${phase} · ${elapsed}s`;
+  }
+  if (activeSeat?.activity) {
+    const activity = activeSeat.activity;
+    const elapsed = activity.started_at
+      ? Math.max(0, Math.round((Date.now() - Date.parse(activity.started_at)) / 1000)) : 0;
+    const phase = activity.turn === "synthesis" ? "SYNTHESIZING" : "INVESTIGATING";
+    return `▸ ${activeSeat.seat.toUpperCase()}: ${phase} · ${elapsed}s`;
+  }
+  if (synthesis?.status === "generating") {
+    const phase = synthesis.phase === "drafting" ? "DRAFTING COUNCIL ANSWER" : "REVIEWING COUNCIL ANSWER";
+    return `▸ ${String(synthesis.current_head || "MAGI").toUpperCase()}: ${phase}`;
+  }
+  if (d?.status === "open") return "▸ MAGI: DELIBERATION IN PROGRESS";
+  if (d?.status === "executing" && d.execution_state === "reviewing") return "▸ MAGI: IMPLEMENTATION UNDER REVIEW";
+  if (d?.execution_state === "merged" && synthesis?.next_move && !d.continuation) return "▸ MAGI: NEXT MOVE READY FOR AUTHORIZATION";
+  if (d?.execution_state === "merged") return "▸ MAGI: OBJECTIVE COMPLETE · STANDBY";
+  if (d?.status === "closed") return "▸ MAGI: DECISION COMPLETE · STANDBY";
+  if (d?.status === "split") return "▸ MAGI: WAITING FOR OPERATOR RULING";
+  return "▸ MAGI: SYSTEM READY · STANDBY";
+}
+
 function renderMagi(d) {
   const activeExecution = d?.status === "executing" ? d.execution_activity : null;
   const activeSeat = d?.seats?.find(seat => seat.activity);
@@ -111,36 +149,7 @@ function renderMagi(d) {
   status.innerHTML = `<div>${esc(ext)}</div>`;
   const line = document.createElement("div");
   line.className = `execution-script${live ? " live" : " idle"}`;
-  if (activeExecution) {
-    const elapsed = activeExecution.started_at
-      ? Math.max(0, Math.round((Date.now() - Date.parse(activeExecution.started_at)) / 1000)) : 0;
-    const phases = ["READING APPROVED PLAN", "INSPECTING ISOLATED WORKTREE", "APPLYING AND VERIFYING CHANGES"];
-    const phase = activeExecution.phase || phases[Math.floor(elapsed / 8) % phases.length];
-    line.textContent = `▸ ${String(activeExecution.seat || "executor").toUpperCase()}: ${phase} · ${elapsed}s`;
-  } else if (activeSeat?.activity) {
-    const activity = activeSeat.activity;
-    const elapsed = activity.started_at
-      ? Math.max(0, Math.round((Date.now() - Date.parse(activity.started_at)) / 1000)) : 0;
-    const phase = activity.turn === "synthesis" ? "SYNTHESIZING" : "INVESTIGATING";
-    line.textContent = `▸ ${activeSeat.seat.toUpperCase()}: ${phase} · ${elapsed}s`;
-  } else if (synthesis?.status === "generating") {
-    const phase = synthesis.phase === "drafting" ? "DRAFTING COUNCIL ANSWER" : "REVIEWING COUNCIL ANSWER";
-    line.textContent = `▸ ${String(synthesis.current_head || "MAGI").toUpperCase()}: ${phase}`;
-  } else if (d?.status === "open") {
-    line.textContent = "▸ MAGI: DELIBERATION IN PROGRESS";
-  } else if (d?.status === "executing" && d.execution_state === "reviewing") {
-    line.textContent = "▸ MAGI: IMPLEMENTATION UNDER REVIEW";
-  } else if (d?.execution_state === "merged" && synthesis?.next_move && !d.continuation) {
-    line.textContent = "▸ MAGI: NEXT MOVE READY FOR AUTHORIZATION";
-  } else if (d?.execution_state === "merged") {
-    line.textContent = "▸ MAGI: OBJECTIVE COMPLETE · STANDBY";
-  } else if (d?.status === "closed") {
-    line.textContent = "▸ MAGI: DECISION COMPLETE · STANDBY";
-  } else if (d?.status === "split") {
-    line.textContent = "▸ MAGI: WAITING FOR OPERATOR RULING";
-  } else {
-    line.textContent = "▸ MAGI: SYSTEM READY · STANDBY";
-  }
+  line.textContent = liveStatusLine(d);
   status.appendChild(line);
   magi.appendChild(status);
 
@@ -160,7 +169,14 @@ function renderMagi(d) {
     inner.className = "inner" + (isActive ? " flicker" : "");
     inner.style.background = color;
     if (seat.voted && ["yes", "conditional", "info"].includes(seat.position)) inner.style.color = "#080604";
-    inner.textContent = `${seat.seat.toUpperCase()} • ${i + 1}`;
+    const name = document.createElement("span");
+    name.textContent = `${seat.seat.toUpperCase()} • ${i + 1}`;
+    const word = document.createElement("span");
+    word.className = "vote-word";
+    // la actividad (THINKING/EXECUTING) ya la dice la etiqueta bajo el polígono
+    word.textContent = seat.error ? "ERROR"
+      : seat.voted ? (VOTE_WORDS[seat.position] || String(seat.position).toUpperCase()) : "PENDING";
+    inner.append(name, word);
     outer.appendChild(inner);
     if (isActive || seat.error) {
       const tag = document.createElement("div");
@@ -201,6 +217,11 @@ function renderStatusBar(d) {
   if (!d) { el.textContent = "MAGI SYSTEM — STANDBY"; return; }
   const conf = d.confidence != null ? ` · VOTE AGREEMENT ${Math.round(Number(d.confidence) * 100)}%` : "";
   el.textContent = `#${d.id} ${d.badge.text}${conf} — ${d.title}`;
+  // Visible sólo en móvil (CSS): ahí el triángulo no tiene altura para la línea viva.
+  const live = document.createElement("span");
+  live.className = "live-line";
+  live.textContent = liveStatusLine(d);
+  el.append(live);
 }
 
 function verdictText(d) {
@@ -209,7 +230,26 @@ function verdictText(d) {
   if (d.status === "split") return "The council needs your decision";
   if (d.status === "executing") return d.execution_state === "failed"
     ? "The approved plan needs attention" : "The approved plan is in execution";
+  // Sin repositorio ni ejecución no hay nada que "aprobar": es una respuesta.
+  // «Approved with conditions» para «¿qué es lo divino?» era vocabulario de
+  // revisión de código aplicado a una pregunta.
+  if (!d.artifact && !d.production) {
+    return ({yes: "El consejo coincide", no: "El consejo lo rechaza", conditional: "Respuesta con matices",
+             info: "Respuesta del consejo"}[d.ruling] || d.badge.text);
+  }
   return ({yes: "Approved", no: "Rejected", conditional: "Approved with conditions"}[d.ruling] || d.badge.text);
+}
+
+// Frases equivalentes salvo puntuación/mayúsculas: las condiciones de tres
+// votos y el «Later» de la síntesis se repetían entre sí.
+function dedupePhrases(items) {
+  const seen = new Set();
+  return (items || []).filter(text => {
+    const key = String(text).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function shortReason(body) {
@@ -379,15 +419,18 @@ function renderSummary(d) {
   } else if (synthesis?.status === "generating") {
     lead.textContent = `${synthesis.current_head || "El consejo"} está redactando la respuesta conjunta. Ciclo ${synthesis.cycle || 1}/2; hasta 120 segundos por intervención.`;
   }
-  const allConditions = d.approved_conditions?.length
+  const conceptual = !d.artifact && !d.production;
+  // En una pregunta sin repositorio las "condiciones" de los votos son
+  // matices, y la síntesis ya los integra en la respuesta.
+  const allConditions = conceptual ? [] : dedupePhrases(d.approved_conditions?.length
     ? d.approved_conditions
-    : [...new Set((d.seats || []).filter(s => s.voted).flatMap(s => s.conditions || []))];
-  conditions.hidden = !allConditions.length;
+    : (d.seats || []).filter(s => s.voted).flatMap(s => s.conditions || []));
+  const later = conceptual ? [] : dedupePhrases([...allConditions, ...(d.deferred_items || [])]).slice(allConditions.length);
+  conditions.hidden = !allConditions.length && !later.length;
   conditions.innerHTML = allConditions.length
     ? `<strong>Conditions:</strong> ${allConditions.map(esc).join(" · ")}` : "";
-  if (d.deferred_items?.length) {
-    conditions.hidden = false;
-    conditions.innerHTML += `${allConditions.length ? "<br>" : ""}<strong>Later:</strong> ${d.deferred_items.map(esc).join(" · ")}`;
+  if (later.length) {
+    conditions.innerHTML += `${allConditions.length ? "<br>" : ""}<strong>Later:</strong> ${later.map(esc).join(" · ")}`;
   }
   const proposal = d.execution_state === "merged" ? d.synthesis?.next_move : null;
   if (proposal) renderContinuation(d, proposal, continuation);
@@ -915,6 +958,7 @@ async function send(forceNew = false) {
     status.textContent = err.name === "AbortError"
       ? "error: the server did not respond in 30s — try again"
       : `error: ${err.message}`;
+    MagiSound.play("failure");  // el sonido confirma el resultado, no el click
   } finally {
     clearTimeout(timeoutId);
     sending = false;
@@ -935,9 +979,14 @@ events.onmessage = e => {
   const previous = focused();
   const current = next.decisions.find(d => d.id === previous?.id);
   if (soundBaseline && previous && current) {
+    // Familias distintas para que se aprendan: alerta = el consejo se trabó
+    // y espera al operador; fallo = algo se rompió (ejecución, merge, cabeza).
     if (current.status !== previous.status || current.execution_state !== previous.execution_state) {
-      MagiSound.play(current.status === "split" || ["failed", "merge_blocked"].includes(current.execution_state)
-        ? "attention" : current.status === "executing" ? "machinery" : "result");
+      MagiSound.play(current.status === "split" ? "attention"
+        : ["failed", "merge_blocked"].includes(current.execution_state) ? "failure"
+        : current.status === "executing" ? "machinery" : "result");
+    } else if (Object.keys(current.turn_errors || {}).length > Object.keys(previous.turn_errors || {}).length) {
+      MagiSound.play("failure");
     } else if (current.round === previous.round && current.seats.some(s => s.voted && !previous.seats.find(p => p.seat === s.seat)?.voted)) {
       MagiSound.play("vote");
     }
