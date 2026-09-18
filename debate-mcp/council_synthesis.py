@@ -226,9 +226,16 @@ def run_latest(invoke, retry=False):
             if not votes:
                 return
             context = conn.execute("SELECT id,body FROM messages WHERE thread=%s AND author='adrian' ORDER BY id DESC LIMIT 3", (d['thread'],)).fetchall()
+            system_evidence = conn.execute(
+                """SELECT id,body FROM messages
+                   WHERE thread=%s AND author='magi' AND kind='resultado'
+                   ORDER BY id DESC LIMIT 5""", (d['thread'],)
+            ).fetchall()
             bundle = {'question': d['title'], 'heads': d['heads'], 'ruling': d['ruling'],
                       'content_check': checking,
                       'human_context': [dict(id=m['id'],body=m['body'][-2000:]) for m in reversed(context)],
+                      'system_evidence': [dict(id=m['id'], body=m['body'][-2000:])
+                                          for m in reversed(system_evidence)],
                       'contributions': [dict(v, body=(v['body'] or '')[-3500:]) for v in votes]}
             if not save(conn,identifier,version,{'status':'generating'}):
                 return
