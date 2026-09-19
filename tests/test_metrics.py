@@ -112,3 +112,34 @@ def test_tokens_aproximados_por_asiento_y_totales(tmp_path, capsys):
     assert metrics.main(["--events", str(events)]) == 0
     out = capsys.readouterr().out
     assert "6,000 de entrada / 3,000 de salida" in out and "in≈tok" in out
+
+
+def test_quality_summary_cubre_resultados_memoria_tiempo_y_tokens(capsys):
+    from datetime import datetime, timedelta, timezone
+    t0 = datetime(2026, 9, 18, 12, 0, tzinfo=timezone.utc)
+    decisions = [
+        {"id": 1, "status": "closed", "ruling": "yes", "production": True, "execution_state": "merged",
+         "created_at": t0, "closed_at": t0 + timedelta(minutes=10), "memory_sources": {"ids": ["decision:0"]}},
+        {"id": 2, "status": "closed", "ruling": "info", "production": False, "execution_state": None,
+         "created_at": t0, "closed_at": t0 + timedelta(minutes=4), "memory_sources": {"ids": ["decision:1"]}},
+        {"id": 3, "status": "open", "ruling": None, "production": False, "execution_state": None,
+         "created_at": t0, "closed_at": None, "memory_sources": None},
+    ]
+    outcomes = [{"id": 1, "decision_id": 1, "status": "failed"}, {"id": 2, "decision_id": 1, "status": "worked"}]
+    feedback = [{"id": 1, "decision_id": 2, "useful": True}, {"id": 2, "decision_id": 99, "useful": False}]
+    events = [
+        {"event": "trigger_done", "decision_id": 1, "rc": 0, "prompt_chars": 8000, "output_chars": 4000},
+        {"event": "trigger_done", "decision_id": 1, "rc": 1, "prompt_chars": 8000, "output_chars": 0},
+        {"event": "trigger_done", "decision_id": 2, "rc": 0, "prompt_chars": 4000, "output_chars": 2000},
+        {"event": "trigger_done", "decision_id": None, "rc": 0, "prompt_chars": 4000},
+    ]
+    q = metrics.quality_summary(decisions, outcomes, feedback, events)
+    assert q["closed"] == 2 and q["by_ruling"] == {"yes": 1, "info": 1}
+    assert q["production"] == 1 and q["by_execution_state"] == {"merged": 1}
+    assert q["outcomes"] == {"reported": 1, "coverage": 0.5, "by_status": {"worked": 1}}, "vale el último reporte"
+    assert q["memory"] == {"with_sources": 2, "labeled": 1, "coverage": 0.5, "useful_rate": 1.0}
+    # #1: (8000+8000)/4 = 4000, #2: 4000/4 = 1000 → mediana 2500; salida 1000 y 500 → 750
+    assert q["wall_p50_s"] == 420 and q["tokens_in_p50"] == 2500 and q["tokens_out_p50"] == 750
+    assert q["head_failures"] == 1
+    text = metrics.render_quality(q, 7)
+    assert "1/2 (50%)" in text and "útil en 100%" in text and "420s" in text

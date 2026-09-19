@@ -61,3 +61,33 @@ def test_real_outcome_is_idempotent_and_does_not_reopen_decision():
         assert conn.execute('SELECT count(*) AS n FROM decision_outcomes').fetchone()['n'] == 2
         assert conn.execute('SELECT count(*) AS n FROM messages').fetchone()['n'] == 2
         assert conn.execute('SELECT status FROM decisions').fetchone()['status'] == 'closed'
+
+
+def test_calificacion_rapida_no_exige_observacion_ni_evidencia():
+    """Cero outcomes en dos semanas porque el formulario pedía dos textos. La
+    calificación rápida (un clic) guarda el resultado con un detalle fijo;
+    sin `quick` la validación sigue igual."""
+    import uuid
+    inserted = []
+
+    class Conn:
+        def execute(self, query, params=()):
+            q = " ".join(query.split())
+            if q.startswith("SELECT id,thread,status FROM decisions"):
+                return _One({"id": 5, "thread": "d5", "status": "closed"})
+            if q.startswith("SELECT * FROM decision_outcomes"):
+                return _One(None)
+            inserted.append((q, params))
+            return _One({"id": 9})
+
+    class _One:
+        def __init__(self, row): self.row = row
+        def fetchone(self): return self.row
+
+    payload = {"decision_id": 5, "status": "worked", "observation": "", "evidence": "", "lesson": "",
+               "request_id": str(uuid.uuid4())}
+    with pytest.raises(ValueError):
+        outcomes.record(Conn(), payload)
+    assert outcomes.record(Conn(), dict(payload, quick=True)) == {"id": 9, "decision_id": 5}
+    message, row = inserted
+    assert "calificación rápida" in message[1][1] and row[1][3] == "calificación rápida, sin detalle"

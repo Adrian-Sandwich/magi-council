@@ -192,13 +192,117 @@ def render(summary: dict, days: int) -> str:
     return "\n".join(lines)
 
 
+# ------------------------------------------------------------- calidad
+
+def _count(values) -> dict:
+    out: dict = {}
+    for v in values:
+        out[v] = out.get(v, 0) + 1
+    return out
+
+
+def quality_summary(decisions: list[dict], outcomes: list[dict], feedback: list[dict],
+                    events: list[dict]) -> dict:
+    """Lo que el lazo de calidad necesita ver junto: cuántas decisiones
+    cerraron y cómo, qué fracción tiene resultado reportado y cuál fue,
+    cuánta memoria se calificó y si sirvió, tiempo de pared y tokens por
+    decisión, y fallos de cabeza. Todo por decisión, no por turno."""
+    closed = [d for d in decisions if d.get("status") == "closed"]
+    by_ruling = _count(str(d.get("ruling")) for d in closed)
+    production = [d for d in decisions if d.get("production")]
+    by_execution = _count(str(d.get("execution_state")) for d in production)
+    outcome_by_decision: dict = {}
+    for o in sorted(outcomes, key=lambda o: o.get("id") or 0):
+        outcome_by_decision[o["decision_id"]] = o.get("status")
+    covered = [d for d in closed if d["id"] in outcome_by_decision]
+    labels = [f for f in feedback if f.get("decision_id") in {d["id"] for d in decisions}]
+    with_memory = [d for d in decisions if d.get("memory_sources")]
+    labeled = {f["decision_id"] for f in labels}
+    wall = []
+    for d in closed:
+        if d.get("created_at") and d.get("closed_at"):
+            wall.append((d["closed_at"] - d["created_at"]).total_seconds())
+    tokens_in: dict = {}
+    tokens_out: dict = {}
+    failures = 0
+    for e in events:
+        did = e.get("decision_id")
+        if e.get("event") != "trigger_done" or did is None:
+            continue
+        if isinstance(e.get("prompt_chars"), (int, float)):
+            tokens_in[did] = tokens_in.get(did, 0) + e["prompt_chars"] / CHARS_PER_TOKEN
+        if isinstance(e.get("output_chars"), (int, float)):
+            tokens_out[did] = tokens_out.get(did, 0) + e["output_chars"] / CHARS_PER_TOKEN
+        if e.get("rc") not in (0, None) or e.get("timed_out"):
+            failures += 1
+    med = lambda values: round(statistics.median(values)) if values else None  # noqa: E731
+    return {
+        "decisions": len(decisions), "closed": len(closed), "by_ruling": by_ruling,
+        "production": len(production), "by_execution_state": by_execution,
+        "outcomes": {"reported": len(covered), "coverage": round(len(covered) / len(closed), 3) if closed else None,
+                     "by_status": _count(outcome_by_decision[d["id"]] for d in covered)},
+        "memory": {"with_sources": len(with_memory), "labeled": len(labeled),
+                   "coverage": round(len(labeled) / len(with_memory), 3) if with_memory else None,
+                   "useful_rate": round(sum(1 for f in labels if f.get("useful")) / len(labels), 3) if labels else None},
+        "wall_p50_s": med(wall),
+        "tokens_in_p50": med(list(tokens_in.values())), "tokens_out_p50": med(list(tokens_out.values())),
+        "head_failures": failures,
+    }
+
+
+def render_quality(q: dict, days: int) -> str:
+    lines = [f"[metrics --quality] últimos {days} días: {q['decisions']} decisiones, {q['closed']} cerradas "
+             f"{q['by_ruling']}; producción {q['production']} {q['by_execution_state']}"]
+    o, m = q["outcomes"], q["memory"]
+    lines.append(f"  resultados reportados: {o['reported']}/{q['closed']} ({_pct(o['coverage'])}) {o['by_status']}")
+    lines.append(f"  memoria calificada: {m['labeled']}/{m['with_sources']} decisiones con fuentes ({_pct(m['coverage'])}); "
+                 f"útil en {_pct(m['useful_rate'])}")
+    lines.append(f"  por decisión: pared p50 {_fmt_secs(q['wall_p50_s'])}, tokens≈ {_fmt_num(q['tokens_in_p50'])} in / "
+                 f"{_fmt_num(q['tokens_out_p50'])} out; turnos de cabeza fallidos: {q['head_failures']}")
+    lines.append("  (objetivos del plan de madurez: ≥50 % con resultado, ≥30 % de memoria calificada)")
+    return "\n".join(lines)
+
+
+def _pct(v) -> str:
+    return "-" if v is None else f"{v * 100:.0f}%"
+
+
+def _load_quality(days: int) -> tuple[list, list, list]:
+    """Filas de Postgres para el informe de calidad (import perezoso: el
+    resto de metrics.py no necesita la base)."""
+    from datetime import datetime as _dt
+    from config import connect
+    since = _dt.now(timezone.utc) - timedelta(days=days)
+    with connect() as conn:
+        decisions = [dict(r) for r in conn.execute(
+            """SELECT id, status, ruling, production, artifact, created_at, closed_at,
+                      minority_report->>'execution_state' AS execution_state,
+                      minority_report->'memory_sources' AS memory_sources
+               FROM decisions WHERE created_at >= %s ORDER BY id""", (since,)).fetchall()]
+        outcomes = [dict(r) for r in conn.execute(
+            "SELECT id, decision_id, status FROM decision_outcomes ORDER BY id").fetchall()]
+        try:
+            feedback = [dict(r) for r in conn.execute(
+                "SELECT id, decision_id, useful FROM memory_feedback ORDER BY id").fetchall()]
+        except Exception:  # base sin la migración 006
+            feedback = []
+    return decisions, outcomes, feedback
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--days", type=int, default=7, help="ventana hacia atrás (default 7)")
     parser.add_argument("--json", action="store_true", help="salida JSON")
+    parser.add_argument("--quality", action="store_true", help="informe del lazo de calidad (necesita Postgres)")
     parser.add_argument("--events", type=Path, default=EVENTS_PATH, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     since = datetime.now(timezone.utc) - timedelta(days=args.days)
+    if args.quality:
+        decisions, outcomes, feedback = _load_quality(args.days)
+        q = quality_summary(decisions, outcomes, feedback, read_events(args.events, since))
+        print(json.dumps({"days": args.days, **q}, ensure_ascii=False, indent=1, default=str) if args.json
+              else render_quality(q, args.days))
+        return 0
     summary = summarize(read_events(args.events, since))
     if args.json:
         print(json.dumps({"days": args.days, **summary}, ensure_ascii=False, indent=1))

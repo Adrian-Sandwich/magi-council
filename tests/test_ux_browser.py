@@ -408,3 +408,32 @@ def test_boton_mergear_con_dos_tercios_solo_con_revision_mayoritaria(page):
     data["decisions"][0]["merge_override"] = {"review_id": 31}
     feed(page, data)
     assert not page.locator("#c-merge").is_visible(), "ya autorizado: el relay está en ello"
+
+
+def test_resultado_rapido_de_la_decision_anterior_al_abrir_una_nueva(page):
+    """Al ir a abrir una decisión nueva, si la última cerrada no tiene
+    resultado, una línea con cuatro botones lo pide; un clic lo guarda como
+    calificación rápida y la línea desaparece. «Después» la oculta."""
+    page.evaluate("localStorage.removeItem('clami.outcome.dismissed')")
+    data = snapshot("closed")
+    data["decisions"][0].update(ruling="yes", outcome=None)
+    feed(page, data)
+    page.get_by_role("button", name="＋ New question").click()
+    prompt = page.locator("#outcome-prompt")
+    assert prompt.is_visible() and "¿Cómo salió la #4" in prompt.inner_text()
+    assert prompt.locator("button").count() == 5
+    sent = []
+    page.route("**/outcome", lambda route: (sent.append(route.request.post_data_json),
+                                              route.fulfill(status=201, content_type="application/json",
+                                                            body='{"id": 1, "decision_id": 4}')))
+    prompt.get_by_role("button", name="Funcionó", exact=True).click()
+    page.wait_for_function("document.getElementById('outcome-prompt').hidden")
+    assert sent[0]["decision_id"] == 4 and sent[0]["status"] == "worked" and sent[0]["quick"] is True
+    assert "Resultado de la #4 guardado" in page.locator("#c-status").inner_text()
+    # otra cerrada sin resultado: «Después» la esconde sin enviar nada
+    data["decisions"][0]["id"] = 6
+    feed(page, data)
+    page.get_by_role("button", name="＋ New question").click()
+    assert page.locator("#outcome-prompt").is_visible()
+    page.locator("#outcome-prompt button.later").click()
+    assert page.locator("#outcome-prompt").is_hidden() and len(sent) == 1

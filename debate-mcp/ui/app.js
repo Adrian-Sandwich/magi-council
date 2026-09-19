@@ -317,6 +317,68 @@ document.getElementById("outcome-form").addEventListener("submit", async event =
   } finally { outcomeSending = false; renderOutcome(focused()); }
 });
 
+// ------------------------------------------------------------- outcome rápido
+
+// Al ir a abrir una decisión nueva, si la última cerrada no tiene resultado
+// registrado, una línea con cuatro botones lo pide. Es el momento en que el
+// operador ya sabe cómo salió; el formulario largo sigue existiendo abajo.
+const OUTCOME_LABELS = {worked: "Funcionó", partial: "Parcial", failed: "No funcionó", unknown: "Aún no sé"};
+let outcomePromptBusy = false;
+function dismissedOutcomes() {
+  try { return new Set(JSON.parse(localStorage.getItem("clami.outcome.dismissed") || "[]")); } catch (_) { return new Set(); }
+}
+function dismissOutcome(id) {
+  try {
+    const seen = dismissedOutcomes(); seen.add(id);
+    localStorage.setItem("clami.outcome.dismissed", JSON.stringify([...seen].slice(-50)));
+  } catch (_) { /* opcional */ }
+}
+function pendingOutcome(newQuestion) {
+  if (!newQuestion || uiMode !== "council" || !state) return null;
+  const dismissed = dismissedOutcomes();
+  return (state.decisions || [])
+    .filter(x => x.status === "closed" && !x.aborted && !x.outcome && !dismissed.has(x.id))
+    .sort((a, b) => b.id - a.id)[0] || null;
+}
+function renderOutcomePrompt(newQuestion) {
+  const box = document.getElementById("outcome-prompt");
+  const d = pendingOutcome(newQuestion);
+  box.hidden = !d;
+  if (!d) { box.replaceChildren(); box.dataset.id = ""; return; }
+  if (box.dataset.id === String(d.id) && box.childElementCount) {
+    box.querySelectorAll("button").forEach(b => { b.disabled = outcomePromptBusy || !connected; });
+    return;
+  }
+  box.dataset.id = String(d.id);
+  box.replaceChildren();
+  const label = document.createElement("span");
+  label.textContent = `¿Cómo salió la #${d.id} «${d.title.length > 70 ? d.title.slice(0, 70) + "…" : d.title}»?`;
+  box.append(label);
+  for (const [status, text] of Object.entries(OUTCOME_LABELS)) {
+    const button = document.createElement("button");
+    button.type = "button"; button.textContent = text; button.dataset.status = status;
+    button.addEventListener("click", async () => {
+      const notice = document.getElementById("c-status");
+      outcomePromptBusy = true; renderOutcomePrompt(true);
+      try {
+        const resp = await postJSON("/outcome", {decision_id: d.id, status, quick: true,
+          observation: "", evidence: "", lesson: "", request_id: outcomeRequestId()});
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || resp.statusText);
+        dismissOutcome(d.id);
+        notice.textContent = `Resultado de la #${d.id} guardado: ${text}. Podés añadir detalle en «¿Cómo salió?».`;
+      } catch (err) {
+        notice.textContent = `No se pudo guardar el resultado: ${err.message}`;
+      } finally { outcomePromptBusy = false; render(); }
+    });
+    box.append(button);
+  }
+  const later = document.createElement("button");
+  later.type = "button"; later.textContent = "Después"; later.className = "later";
+  later.addEventListener("click", () => { dismissOutcome(d.id); render(); });
+  box.append(later);
+}
+
 function renderSummary(d) {
   const card = document.getElementById("summary-card");
   const title = document.getElementById("summary-title");
@@ -714,6 +776,7 @@ function render() {
   renderIntent(d);
   const active = d && ["open", "split", "executing"].includes(d.status);
   const newQuestion = uiMode === "council" && !active;
+  renderOutcomePrompt(newQuestion);
   document.querySelector(".composer-opts").hidden = !newQuestion;
   document.getElementById("repo-help").hidden = !newQuestion;
   if (!newQuestion) document.getElementById("fs-panel").hidden = true;

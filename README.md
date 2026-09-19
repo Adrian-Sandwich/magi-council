@@ -59,7 +59,9 @@ Per-OS shortcuts:
 - **Windows**: double-click `Iniciar MAGI.bat` in the repository root. It
   starts portable Postgres (if needed), migrates, starts relay + UI in the
   background, and opens your browser. Logs are in `debate-mcp/logs/`.
-  `debate-mcp\bin\start-magi.bat` also uses this launcher.
+  `debate-mcp\bin\start-magi.bat` also uses this launcher. The three
+  processes are created through WMI, so they do not belong to the console
+  (or agent session) that started them and survive its closing.
   `debate-mcp\bin\stop-magi.bat` shuts everything down.
 - **macOS/Linux**: `.venv/bin/python relay.py` and `.venv/bin/python magi_ui.py`
   (daemonize them as you like; `launchd/install.sh` is the macOS way).
@@ -113,7 +115,11 @@ and timeout rates per seat and turn type (from `logs/trigger_events.jsonl`):
 turn (prompt, output and memory block, at 4 characters per token; what a
 head reads on its own with tools is not visible). A CLI head that dies
 within seconds of starting with no output is retried once before its turn
-is marked ERROR.
+is marked ERROR. `metrics.py --quality` is the weekly quality panel: closed
+decisions by verdict, how many have an outcome and which, how many of the
+decisions that saw memory were rated and how often it helped, wall time and
+tokens per decision, failed head turns — against the targets of
+`docs/plan-madurez.md`.
 
 What a head receives per turn: the journal (last 15 messages, 18 000
 characters at most), the memory block (at most 5 dossiers and 4 500
@@ -123,8 +129,9 @@ topic in common is not memory, it is padding), and in round 1 of a decision
 with a repository a **repository brief** built from the code graph (size,
 folders, HTTP entry points, most-referenced and most recently changed
 files) so heads with tools read what matters instead of exploring. Retrieval quality against your own
-board's real follow-ups: `memory-graph/eval_retrieval.py` (leave-one-out;
-see `docs/memory-evolution.md`).
+board's real follow-ups: `memory-graph/eval_retrieval.py` (leave-one-out
+recall, plus the precision of each source the council saw, from your 👍/👎
+ratings; see `docs/memory-evolution.md`).
 
 ## How you use it (the web, in 30 seconds)
 
@@ -236,7 +243,11 @@ hand-labeled set. It never changes votes or reopens anything.
 partial or unconfirmed — with an observation, an evidence reference and an
 optional learning. Reports stay on the decision (it never reopens, never
 re-arms executions), sync to the memory graph, and new context flags when
-earlier reports disagreed.
+earlier reports disagreed. When you open a new question and the last
+closed decision has no outcome yet, one line above the box asks for it
+(«¿Cómo salió la #41?») with one button per result: a click stores a
+quick rating without observation or evidence; **Después** hides the line
+for that decision.
 
 The memory roadmap and its known limits live in `docs/memory-evolution.md`.
 

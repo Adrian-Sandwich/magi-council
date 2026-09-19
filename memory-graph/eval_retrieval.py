@@ -138,12 +138,22 @@ def summarize_labels(rows: list[dict]) -> dict:
             continue
         for source in r.get("sources") or []:
             negative[source] = negative.get(source, 0) + 1
+    # Precisión por fuente: cuántas veces cada nodo apareció en un bloque
+    # calificado útil sobre las veces que apareció (con ≥ 2 apariciones).
+    seen: dict[str, list[int]] = {}
+    for r in rows:
+        for source in r.get("sources") or []:
+            seen.setdefault(source, [0, 0])
+            seen[source][0] += 1
+            seen[source][1] += 1 if r.get("useful") else 0
+    precision = {s: round(u / n, 3) for s, (n, u) in seen.items() if n >= 2}
     return {
         "labels": total,
         "useful": useful,
         "useful_rate": round(useful / total, 3) if total else None,
         "decisions": len({r.get("decision_id") for r in rows}),
         "most_rejected": sorted(negative.items(), key=lambda kv: (-kv[1], kv[0]))[:5],
+        "source_precision": dict(sorted(precision.items(), key=lambda kv: (kv[1], kv[0]))),
     }
 
 
@@ -200,6 +210,8 @@ def render(report: dict) -> str:
                      f"útil en {labels['useful_rate'] * 100:.0f}%")
         for source, n in labels["most_rejected"]:
             lines.append(f"    {n:>3}× en bloques marcados 'no sirvió': {source}")
+        for source, p in list(labels.get("source_precision", {}).items())[:5]:
+            lines.append(f"    precisión {p * 100:.0f}% (≥2 apariciones): {source}")
     else:
         # sin emoji: la consola de Windows (cp1252) no los imprime
         lines.append("  etiquetas humanas: ninguna todavía (Sirvió / No sirvió en la tarjeta de síntesis)")

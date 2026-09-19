@@ -11,11 +11,19 @@ def record(conn, payload):
     status = payload.get('status')
     if status not in ('worked','failed','partial','unknown'):
         raise ValueError('Resultado inválido')
+    # Calificación rápida (un clic al abrir la siguiente decisión): vale más
+    # un resultado sin detalle que ninguno — hasta el 2026-09-18 había cero
+    # outcomes registrados porque el formulario pedía dos textos.
+    quick = payload.get('quick') is True
     values = {}
     for key, limit in [('observation',2000),('evidence',2000),('lesson',1000)]:
         value = payload.get(key, '')
-        if not isinstance(value,str) or len(value.strip()) > limit or (key != 'lesson' and not value.strip()):
+        if not isinstance(value, str) or len(value.strip()) > limit:
             raise ValueError('Describí lo observado y la evidencia (máximo 2000 caracteres; aprendizaje 1000)')
+        if key != 'lesson' and not value.strip():
+            if not quick:
+                raise ValueError('Describí lo observado y la evidencia (máximo 2000 caracteres; aprendizaje 1000)')
+            value = 'calificación rápida, sin detalle'
         values[key] = value.strip()
     try:
         request_id = str(uuid.UUID(payload.get('request_id', '')))

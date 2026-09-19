@@ -62,8 +62,11 @@ del log en el journal + `execution_cause` en el dossier), 2.4 (reintento
 `/merge-majority`, botón **Mergear con 2/3**; el relay integra sólo esa
 revisión y lo anota como arbitraje). 2.3 ya existía en el relay
 (`commit_execution`) — la falla "sin commit" de la #28 era anterior a ese
-cambio; ahora además se clasifica. Pendiente: 2.5, la corrida de aceptación
-con 10 planes reales.
+cambio; ahora además se clasifica. 2.5 en curso (2026-09-18): el plan 1
+(#44) se integró de punta a punta en 223 s; el plan 2 (#46) cayó con causa
+`entorno` porque Postgres y el relay murieron con la sesión que los había
+lanzado — de ahí el lanzador por WMI en `start-magi.ps1` — y la corrida se
+reanudó desde el plan 2. El resultado va a `docs/executor-runs.md`.
 
 ## 3. Lazo de calidad — que «¿sirve?» tenga datos (2–3 días + uso)
 
@@ -80,6 +83,17 @@ las personas se seguirán ajustando a ojo.
 | 3.5 | Segunda corrida de `persona_ab.py` con n ≥ 20 decisiones y las tres cabezas reales (no sólo Claude), para separar proveedor de persona. | Tabla en `docs/personas.md`; decisión documentada de mantener o cambiar el modo. |
 
 Dependencias: 1. Se puede hacer en paralelo con 2.
+
+**Hecho el 2026-09-18** — 3.1 (línea «¿Cómo salió la #n?» al abrir una
+pregunta nueva, con un botón por resultado; `quick: true` en `/outcome`
+guarda sin observación ni evidencia), 3.3 (`eval_retrieval.py` calcula la
+precisión por fuente con las etiquetas 👍/👎, sólo fuentes con ≥ 2
+apariciones) y 3.4 (`metrics.py --quality`: cerradas por veredicto,
+outcomes y cobertura, memoria calificada y tasa de útil, pared y tokens por
+decisión, turnos fallidos). 3.2: los botones ya estaban en la tarjeta con
+un clic; lo nuevo es que el panel cuenta «sin calificar» (decisiones con
+fuentes y sin etiqueta). Pendiente: agendar el panel semanal, 3.5 y, sobre
+todo, las dos semanas de uso que piden las metas de cobertura.
 
 ## 4. Proveedores por API con costo y reintentos (3–4 días)
 

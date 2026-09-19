@@ -584,6 +584,10 @@ body {
 #outcome-form label { display: block; margin: 10px 0; }
 #outcome-form textarea { display: block; box-sizing: border-box; width: 100%; margin-top: 5px; }
 .summary-meta { color: #ffb454; font-size: 12px; letter-spacing: .04em; }
+.outcome-prompt { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 0 0 12px; padding: 10px 12px; border: 1px solid #8f622c; border-left: 4px solid #ffb454; background: #120c04; color: #ffd8a6; font-size: 12px; }
+.outcome-prompt span { flex: 1 1 100%; }
+.outcome-prompt button { padding: 6px 12px; font-size: 12px; }
+.outcome-prompt button.later { color: #b6a58f; border-color: #4a341c; }
 .memory-feedback { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 10px; padding: 8px 10px; border: 1px dashed #69451f; color: #c4aa89; font-size: 11px; letter-spacing: .04em; }
 .memory-feedback .memory-sources { flex: 1 1 100%; color: #917653; overflow-wrap: anywhere; }
 .memory-feedback button { padding: 5px 10px; font-size: 11px; }

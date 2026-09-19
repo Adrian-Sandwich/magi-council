@@ -88,7 +88,17 @@ def test_summarize_labels_cuenta_utilidad_y_fuentes_rechazadas():
     assert summary["useful_rate"] == 0.333
     assert summary["most_rejected"] == [("decision:7", 2), ("doc:b", 1)]
     assert eval_retrieval.summarize_labels([]) == {"labels": 0, "useful": 0, "useful_rate": None,
-                                                   "decisions": 0, "most_rejected": []}
+                                                   "decisions": 0, "most_rejected": [], "source_precision": {}}
     assert "ninguna todavía" in eval_retrieval.render({"cases": 0, "same_repo": False, "results": [],
         "lexical": {"recall@1": None, "recall@3": None}, "hybrid": {"recall@1": None, "recall@3": None},
         "labels": summary | {"labels": 0}})
+
+
+def test_summarize_labels_calcula_precision_por_fuente():
+    rows = [
+        {"decision_id": 1, "useful": True, "sources": ["decision:7", "doc:a"]},
+        {"decision_id": 2, "useful": False, "sources": ["decision:7"]},
+        {"decision_id": 3, "useful": True, "sources": ["decision:7", "doc:b"]},
+    ]
+    summary = eval_retrieval.summarize_labels(rows)
+    assert summary["source_precision"] == {"decision:7": 0.667}, "doc:a y doc:b: una sola aparición, no cuentan"
