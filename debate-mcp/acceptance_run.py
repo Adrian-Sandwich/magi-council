@@ -87,8 +87,11 @@ def run_task(index: int, task: str, repo: str, log) -> dict:
     retried = False
     authorized = False
     last_state = None
+    last_review = None  # /state deja de traer la revisión cuando la decisión cierra
     while time.time() - started < TASK_TIMEOUT_SECS:
         d = state_of(did)
+        if d and d.get("review"):
+            last_review = d["review"]
         if d is None:
             record["events"].append("la decisión desapareció del estado")
             record["final"] = "desaparecida"
@@ -140,7 +143,13 @@ def run_task(index: int, task: str, repo: str, log) -> dict:
         record["final"] = "timeout"
         _request("POST", "/abort", {"decision_id": did})
     d = state_of(did) or {}
-    record.update(elapsed_s=round(time.time() - started), votes=votes_of(d), review=d.get("review"),
+    if last_review and last_review.get("id"):
+        # la revisión es otra decisión del tablero: su veredicto final vive ahí
+        rv = state_of(last_review["id"]) or {}
+        last_review = {**last_review, "status": rv.get("status", last_review.get("status")),
+                       "ruling": rv.get("ruling"), "confidence": rv.get("confidence")}
+    record.update(elapsed_s=round(time.time() - started), votes=votes_of(d),
+                  review=d.get("review") or last_review,
                   ruling=d.get("ruling"), retried=retried, authorized=authorized,
                   cause=record.get("cause") or d.get("execution_cause"))
     log(f"[{index}] #{did} FINAL {record['final']} ({record['elapsed_s']}s)")
@@ -160,7 +169,8 @@ def render(records: list[dict], repo: str) -> str:
     for r in records:
         rev = r.get("review") or {}
         rev_txt = f"#{rev.get('id')} {rev.get('ruling')} {rev.get('confidence')}" if rev else "—"
-        lines.append(f"| {r['task']} | #{r.get('decision_id')} | {r.get('final')} | {r.get('elapsed_s')}s | "
+        final = f"{r.get('final')} (repetido)" if r.get("rerun") else r.get("final")
+        lines.append(f"| {r['task']} | #{r.get('decision_id')} | {final} | {r.get('elapsed_s')}s | "
                      f"{r.get('votes')} | {rev_txt} | {r.get('cause') or '—'} | {'sí' if r.get('retried') else 'no'} |")
     lines += ["", "## Peticiones", ""]
     for r in records:
@@ -183,27 +193,57 @@ def main(argv=None) -> int:
     parser.add_argument("--repo", required=True)
     parser.add_argument("--limit", type=int, default=len(TASKS))
     parser.add_argument("--start", type=int, default=1, help="primer plan (1-based), para reanudar")
+    parser.add_argument("--only", type=int, action="append", default=[],
+                        help="repetir sólo estos planes (1-based) y reemplazar su registro; el resto se conserva")
+    parser.add_argument("--note", default="", help="con --only: por qué se repite, queda en los eventos del plan")
     args = parser.parse_args(argv)
     repo = str(Path(args.repo).resolve())
     records = []
-    if OUT_JSON.exists() and args.start > 1:
-        records = json.loads(OUT_JSON.read_text(encoding="utf-8"))["records"][: args.start - 1]
+    if OUT_JSON.exists() and (args.start > 1 or args.only):
+        records = json.loads(OUT_JSON.read_text(encoding="utf-8"))["records"]
+        if not args.only:
+            records = records[: args.start - 1]
 
     def log(msg):
         print(f"{datetime.now():%H:%M:%S} {msg}", flush=True)
 
-    for index, task in enumerate(TASKS[: args.limit], start=1):
-        if index < args.start:
-            continue
+    def attempt(index, task):
         try:
-            records.append(run_task(index, task, repo, log))
+            return run_task(index, task, repo, log)
         except Exception as exc:  # una tarea rota no tira la corrida
             log(f"[{index}] ERROR {type(exc).__name__}: {exc}")
-            records.append({"task": index, "request": task, "final": f"error:{type(exc).__name__}",
-                            "events": [str(exc)], "elapsed_s": 0})
+            return {"task": index, "request": task, "final": f"error:{type(exc).__name__}",
+                    "events": [str(exc)], "elapsed_s": 0}
+
+    def save():
         OUT_JSON.write_text(json.dumps({"repo": repo, "records": records}, ensure_ascii=False, indent=1),
                             encoding="utf-8")
         OUT_MD.write_text(render(records, repo), encoding="utf-8")
+
+    if args.only:
+        # repetir planes sueltos (una suspensión de la máquina, un bug del relay ya
+        # corregido) sin perder los registros de los demás
+        for index in args.only:
+            record = attempt(index, TASKS[index - 1])
+            previous = next((r for r in records if r.get("task") == index), None)
+            if previous:
+                note = f" — {args.note}" if args.note else ""
+                record["events"].insert(0, f"corrida anterior: #{previous.get('decision_id')} "
+                                           f"{previous.get('final')} ({previous.get('elapsed_s')}s){note}")
+                records[records.index(previous)] = record
+            else:
+                records.append(record)
+            record["rerun"] = True
+            records.sort(key=lambda r: r.get("task", 0))
+            save()
+        log("corrida terminada")
+        return 0
+
+    for index, task in enumerate(TASKS[: args.limit], start=1):
+        if index < args.start:
+            continue
+        records.append(attempt(index, task))
+        save()
     log("corrida terminada")
     return 0
 

@@ -62,11 +62,17 @@ del log en el journal + `execution_cause` en el dossier), 2.4 (reintento
 `/merge-majority`, botón **Mergear con 2/3**; el relay integra sólo esa
 revisión y lo anota como arbitraje). 2.3 ya existía en el relay
 (`commit_execution`) — la falla "sin commit" de la #28 era anterior a ese
-cambio; ahora además se clasifica. 2.5 en curso (2026-09-18): el plan 1
-(#44) se integró de punta a punta en 223 s; el plan 2 (#46) cayó con causa
-`entorno` porque Postgres y el relay murieron con la sesión que los había
-lanzado — de ahí el lanzador por WMI en `start-magi.ps1` — y la corrida se
-reanudó desde el plan 2. El resultado va a `docs/executor-runs.md`.
+cambio; ahora además se clasifica. 2.5 hecho el 2026-09-19: 10 de 10
+planes llegaron a revisión y 10 de 10 se integraron (4 con el merge 2/3),
+entre 151 s y 334 s cada uno (`docs/executor-runs.md`). Lo que falló en el
+camino no fue el ejecutor: Postgres y el relay morían con la sesión que los
+lanzaba (lanzador por WMI en `start-magi.ps1`), la laptop se suspendió con
+la tapa cerrada, codex volcó un `.pyc` con bytes NUL y Postgres rechazó el
+voto (`_decode_cli_output` los descarta), y casper chocó con el límite de
+sesión de Claude a media revisión. Ese último caso sigue abierto: una
+revisión con dos votos y una cabeza en ERROR no cierra sola (va con 4.5).
+Pendiente menor: el ejecutor deja los worktrees `d<n>` y `merge-<n>` en el
+repo después de integrar; hay que podarlos.
 
 ## 3. Lazo de calidad — que «¿sirve?» tenga datos (2–3 días + uso)
 

@@ -1391,3 +1391,13 @@ def test_review_approves_unanime_o_mayoria_autorizada():
     assert relay._review_approves(dict(rev, confidence=1.0), None)
     assert not relay._review_approves(dict(rev, ruling="no", confidence=1.0), {"review_id": 30})
     assert not relay._review_approves(dict(rev, confidence=1.0, minority_report={"aborted": True}), None)
+
+
+def test_decode_cli_output_quita_bytes_nul():
+    """codex volcó un .pyc en su salida (#90): miles de NUL delante de un
+    voto válido. Postgres rechaza cualquier texto con NUL, así que el turno
+    fallaba aunque el voto estuviera bien; ahora los NUL se descartan."""
+    raw = b"cabecera\r\n\x00\x00\xc3\xb3\x00\nPOSITION: conditional\nCONDITIONS: nada\n"
+    text = relay._decode_cli_output(raw)
+    assert "\x00" not in text
+    assert text.endswith("POSITION: conditional\nCONDITIONS: nada\n") and "ó" in text

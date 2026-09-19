@@ -867,7 +867,11 @@ def _run_cli_inline(seat_info: dict, prompt: str, cwd: str, timeout: int,
 
 
 def _decode_cli_output(data: bytes) -> str:
-    """Decode Windows CLIs without silently persisting replacement glyphs."""
+    """Decode Windows CLIs without silently persisting replacement glyphs.
+    Sin bytes NUL: Postgres rechaza el texto entero («cannot contain NUL»)
+    y un solo `cat` de un .pyc en la salida de codex tiraba el voto de la
+    #90 con las tres cabezas de acuerdo."""
+    data = data.replace(b"\x00", b"")
     for encoding in dict.fromkeys(("utf-8", locale.getpreferredencoding(False), "cp1252")):
         try:
             return data.decode(encoding)
