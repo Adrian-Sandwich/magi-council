@@ -101,12 +101,14 @@ def row(pg, did):
 
 def test_failed_turn_is_durable_visible_and_retry_preserves_votes(pg, monkeypatch):
     did = start(pg)
+    # dos votos distintos: sin mayoría, el error deja la ronda esperando al operador
     board.record_position(pg, did, 'balthasar', 'yes', 'existing evidence')
-    board.record_position(pg, did, 'casper', 'yes', 'other evidence')
+    board.record_position(pg, did, 'casper', 'no', 'other evidence')
     with pg.transaction():
         assert turn_errors.record(pg, did, 'melchior', 1, 'Missing board tools')
         assert not turn_errors.record(pg, did, 'melchior', 1, 'duplicate')
     d = row(pg, did)
+    assert d['status'] == 'open'
     assert magi_ui.verdict_badge(d)['text'] == 'TURN FAILED'
     assert pg.execute('SELECT count(*) n FROM positions').fetchone()['n'] == 2
     calls = []
@@ -127,7 +129,31 @@ def test_failed_turn_is_durable_visible_and_retry_preserves_votes(pg, monkeypatc
         turn_errors.retry(pg, did, failures)
     with pg.transaction():
         board.record_position(pg, did, 'melchior', 'yes', 'Recovered', expected_round=1)
-    assert row(pg, did)['status'] == 'closed'
+    d = row(pg, did)
+    assert d['status'] == 'closed' and d['ruling'] == 'yes' and not d['minority_report'].get('degraded')
+
+
+def test_two_matching_votes_and_a_failed_seat_close_degraded(pg):
+    """#96: casper hit its session limit after melchior and balthasar had
+    both approved; the review stayed open for good. Now the recorded
+    failure lets the round close degraded with majority confidence, and
+    the dossier keeps who failed and why."""
+    did = start(pg)
+    board.record_position(pg, did, 'balthasar', 'yes', 'existing evidence')
+    board.record_position(pg, did, 'casper', 'yes', 'other evidence')
+    with pg.transaction():
+        assert turn_errors.record(pg, did, 'melchior', 1, 'session limit')
+    d = row(pg, did)
+    assert d['status'] == 'closed' and d['ruling'] == 'yes' and round(float(d['confidence']), 2) == 0.66
+    mr = d['minority_report']
+    assert mr['degraded'] is True and mr['errored'] == ['melchior']
+    assert mr['turn_errors']['melchior']['message'] == 'session limit'
+    assert not turn_errors.active(d), 'cerrada: ya no hay errores activos que reintentar'
+    bodies = [m['body'] for m in pg.execute('SELECT body FROM messages ORDER BY id').fetchall()]
+    assert any(b.startswith('ERROR EN TURNO de melchior') for b in bodies)
+    assert any('APROBADA' in b or 'yes' in b.lower() for b in bodies[-1:]), bodies[-1]
+    with pytest.raises(ValueError):
+        turn_errors.retry(pg, did, {'melchior': mr['turn_errors']['melchior']['id']})
 
 
 def test_stale_failure_and_vote_do_not_contaminate_new_round(pg):

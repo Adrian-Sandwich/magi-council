@@ -141,3 +141,23 @@ def merge_reviewed(run: dict, message: str) -> str:
         raise RuntimeError("aparecieron cambios locales durante la integración")
     git(repo, "-c", "core.hooksPath=", "merge", "--ff-only", "--no-edit", "--no-overwrite-ignore", head)
     return head
+
+
+def cleanup(run: dict) -> list[str]:
+    """Después de integrar: borra el worktree del plan, el de integración y la
+    rama del plan. La corrida de aceptación dejó 22 worktrees en el repo de
+    prueba porque nadie los podaba. El merge ya está en la rama base; si algo
+    de esto falla, el llamador lo anota y el directorio queda para inspección."""
+    repo = run["repo"]
+    removed = []
+    integration = (str(Path(common_dir(repo)) / "magi-worktrees" / f"merge-{run['review_id']}")
+                   if run.get("review_id") else None)
+    for path in (run.get("worktree"), integration):
+        if path and Path(path).exists():
+            git(repo, "worktree", "remove", "--force", path)
+            removed.append(path)
+    git(repo, "worktree", "prune")
+    branch = run.get("branch")
+    if branch and git(repo, "branch", "--list", branch):
+        git(repo, "branch", "-d", branch)
+    return removed

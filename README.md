@@ -109,7 +109,12 @@ stuck decisions, graph freshness per source, and seats whose failure rate over
 the last week exceeds 30 % in their current role). On Windows schedule it
 every 15 minutes with a toast on failure:
 `powershell -ExecutionPolicy Bypass -File debate-mcp\bin\schedule-healthcheck.ps1`
-(`-Remove` unregisters; log in `debate-mcp/logs/healthcheck.log`). Latency, error
+(`-Remove` unregisters; log in `debate-mcp/logs/healthcheck.log`).
+Two more from the same folder: `schedule-magi.ps1` drops a `ClaMi-magi.cmd`
+into your Startup folder so MAGI starts at logon (after a reboot nothing
+else does), and `schedule-quality.ps1` schedules
+`metrics.py --quality --notify` every Monday at 9:00 with a toast; each
+accepts `-Remove`. Latency, error
 and timeout rates per seat and turn type (from `logs/trigger_events.jsonl`):
 `.venv/bin/python metrics.py --days 30` — including approximate tokens per
 turn (prompt, output and memory block, at 4 characters per token; what a
@@ -292,7 +297,13 @@ repository or the configured default repository becomes the isolated worktree:
    journal. When the review approved with 2 of 3, the UI offers **Mergear
    con 2/3**: your explicit authorization is recorded as arbitration in the
    journal and the relay then integrates with the same checks as a unanimous
-   merge. An executor failure records its cause (`timeout`, `crash`,
+   merge. A seat whose turn fails (a CLI crash, a session limit) is
+   recorded as an ERROR that never becomes a vote; if the seats that did
+   vote are a majority and agree, the round closes **degraded** with
+   majority confidence (the dossier keeps who failed and why), so a
+   review with two approvals and one dead head reaches **Mergear con 2/3**
+   instead of waiting forever. Two different votes plus an error wait for
+   your retry. An executor failure records its cause (`timeout`, `crash`,
    `error`, `sin_cambios`, `sin_commit`, `entorno`) and the last lines of
    the executor's log in the journal; a process that dies within seconds of
    starting with no output is retried once.
@@ -322,7 +333,9 @@ majority's. If execution fails, it
 waits for an explicit retry; failures are never deleted from the journal.
 
 Worktrees are kept in `<git-common-dir>/magi-worktrees/` for inspection and
-recovery. After an executor failure, **"retry"** reuses the execution worktree
+recovery until the plan is merged; then the plan worktree, the integration
+worktree and the `magi/d<n>` branch are removed (a failed cleanup is only
+logged). After an executor failure, **"retry"** reuses the execution worktree
 and opens a new review; after a merge failure, it retries only the already
 approved merge and does not run the executor again. It never silently changes
 the plan's base. If your base branch moved, open a new plan on that base or

@@ -294,14 +294,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--days", type=int, default=7, help="ventana hacia atrás (default 7)")
     parser.add_argument("--json", action="store_true", help="salida JSON")
     parser.add_argument("--quality", action="store_true", help="informe del lazo de calidad (necesita Postgres)")
+    parser.add_argument("--notify", action="store_true",
+                        help="con --quality: además avisa con una notificación del sistema (panel semanal)")
     parser.add_argument("--events", type=Path, default=EVENTS_PATH, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     since = datetime.now(timezone.utc) - timedelta(days=args.days)
     if args.quality:
         decisions, outcomes, feedback = _load_quality(args.days)
         q = quality_summary(decisions, outcomes, feedback, read_events(args.events, since))
+        text = render_quality(q, args.days)
         print(json.dumps({"days": args.days, **q}, ensure_ascii=False, indent=1, default=str) if args.json
-              else render_quality(q, args.days))
+              else text)
+        if args.notify:
+            # panel semanal agendado (bin/schedule-quality.ps1): el toast lleva
+            # las dos líneas que importan; el resto queda en el log
+            from healthcheck import notify
+            lines = [line.strip() for line in text.split("\n")]
+            notify("MAGI · calidad de la semana", " · ".join(lines[1:3]))
         return 0
     summary = summarize(read_events(args.events, since))
     if args.json:

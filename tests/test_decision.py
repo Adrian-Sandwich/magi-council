@@ -528,3 +528,24 @@ def test_prompt_mcp_sin_artefacto_no_manda_a_investigar_el_repo():
     assert "Read/Grep/Glob" not in txt
     con = decision.build_head_prompt("melchior", personas.system_prompt("melchior"), mk_decision(artifact="/repo"), 9)
     assert "Read/Grep/Glob" in con
+
+
+def test_asiento_en_error_con_dos_votos_iguales_cierra_degradado():
+    """casper chocó con su límite de sesión a media revisión (#96) y la ronda
+    quedó abierta para siempre con dos votos iguales. Con el error anotado en
+    el dossier, dos votos coincidentes cierran degradado y con confianza de
+    mayoría: nada se integra sin que el operador lo autorice."""
+    d = mk_decision(minority_report={"turn_errors": {"casper": {"id": "x", "round": 1, "message": "límite"}}})
+    act = decision.advance(d, [mk_pos("melchior", "yes"), mk_pos("balthasar", "yes")])
+    assert act["action"] == "close" and act["ruling"] == "yes"
+    assert act["confidence"] == decision.CONFIDENCE_MAJORITY
+    assert act["degraded"] is True and act["errored"] == ["casper"]
+
+
+def test_asiento_en_error_con_votos_distintos_o_un_solo_voto_espera():
+    d = mk_decision(minority_report={"turn_errors": {"casper": {"id": "x", "round": 1, "message": "límite"}}})
+    assert decision.advance(d, [mk_pos("melchior", "yes"), mk_pos("balthasar", "no")]) == {"action": "wait"}
+    assert decision.advance(d, [mk_pos("melchior", "yes")]) == {"action": "wait"}
+    # un error de la ronda anterior no cuenta en la nueva
+    stale = mk_decision(round=2, minority_report={"turn_errors": {"casper": {"id": "x", "round": 1, "message": "viejo"}}})
+    assert decision.advance(stale, [mk_pos("melchior", "yes", 2), mk_pos("balthasar", "yes", 2)]) == {"action": "wait"}

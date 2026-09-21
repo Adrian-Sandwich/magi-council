@@ -71,8 +71,10 @@ la tapa cerrada, codex volcó un `.pyc` con bytes NUL y Postgres rechazó el
 voto (`_decode_cli_output` los descarta), y casper chocó con el límite de
 sesión de Claude a media revisión. Ese último caso sigue abierto: una
 revisión con dos votos y una cabeza en ERROR no cierra sola (va con 4.5).
-Pendiente menor: el ejecutor deja los worktrees `d<n>` y `merge-<n>` en el
-repo después de integrar; hay que podarlos.
+El ejecutor ya poda los worktrees `d<n>` y `merge-<n>` y la rama del plan
+después de integrar (2026-09-21). MAGI arranca al iniciar sesión (entrada en la
+carpeta Inicio) con
+`bin/schedule-magi.ps1`.
 
 ## 3. Lazo de calidad — que «¿sirve?» tenga datos (2–3 días + uso)
 
@@ -98,7 +100,8 @@ apariciones) y 3.4 (`metrics.py --quality`: cerradas por veredicto,
 outcomes y cobertura, memoria calificada y tasa de útil, pared y tokens por
 decisión, turnos fallidos). 3.2: los botones ya estaban en la tarjeta con
 un clic; lo nuevo es que el panel cuenta «sin calificar» (decisiones con
-fuentes y sin etiqueta). Pendiente: agendar el panel semanal, 3.5 y, sobre
+fuentes y sin etiqueta). El panel semanal quedó agendado el 2026-09-21
+(`bin/schedule-quality.ps1`, lunes 9:00 con toast). Pendiente: 3.5 y, sobre
 todo, las dos semanas de uso que piden las metas de cobertura.
 
 ## 4. Proveedores por API con costo y reintentos (3–4 días)
@@ -117,6 +120,13 @@ revisar y sintetizar basta una API.
 | 4.5 | Fallback: si un asiento API falla 3 veces seguidas en el día, `healthcheck` lo marca y el relay lo salta (decisión degradada, no colgada). | Test; el consejo cierra con 2 cabezas y `degraded: true`. |
 
 Dependencias: 1 y 3.4 (para medir). Independiente de 2.
+
+**Adelantado el 2026-09-21** — la mitad de 4.5 que no depende de la API: una
+ronda cuyos asientos faltantes están en ERROR cierra degradada (confianza
+de mayoría, `degraded: true`, `errored` y `turn_errors` en el dossier) cuando
+los que sí votaron son mayoría y coinciden; con votos distintos o un solo
+voto sigue esperando el reintento. Falta la parte de saltar un asiento que
+falla 3 veces en el día.
 
 ## 5. Instalación en un paso y guía de operación (2 días)
 

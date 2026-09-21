@@ -71,6 +71,13 @@ def missing_seats(decision: dict, positions: list[dict]) -> list[str]:
     return [h for h in decision["heads"] if h not in cast]
 
 
+def errored_seats(decision: dict) -> list[str]:
+    """Asientos con turno fallido registrado en la ronda actual (turn_errors
+    del dossier). No votaron ni van a votar sin un reintento explícito."""
+    errors = (decision.get("minority_report") or {}).get("turn_errors") or {}
+    return [h for h in decision["heads"] if (errors.get(h) or {}).get("round") == decision["round"]]
+
+
 def pending_turns(decision: dict, positions: list[dict]) -> list[dict]:
     """Turnos que el relay debe disparar ahora: los asientos que faltan en la
     ronda actual de una decisión abierta."""
@@ -138,7 +145,22 @@ def advance(decision: dict, positions: list[dict]) -> dict:
     """
     if decision["status"] != "open":
         return {"action": "none"}
-    if missing_seats(decision, positions):
+    missing = missing_seats(decision, positions)
+    if missing:
+        # Una cabeza en ERROR no vuelve sola: casper chocó con su límite de
+        # sesión a media revisión (#96) y la ronda quedó abierta para siempre
+        # con dos votos iguales. Si todo lo que falta está en error y los que
+        # votaron son mayoría y coinciden, la ronda cierra degradada con
+        # confianza de mayoría: un plan o una revisión así no se integra sin
+        # que el operador lo autorice (2/3). Dos votos distintos esperan al
+        # reintento; un solo voto también.
+        errored = errored_seats(decision)
+        voted = [h for h in decision["heads"] if h not in missing]
+        if errored and set(missing) <= set(errored) and len(voted) >= 2:
+            res = resolve_votes(decision, positions)
+            if res is not None and res["ruling"] != "info":
+                res["confidence"] = min(res["confidence"], CONFIDENCE_MAJORITY)
+                return {"action": "close", **res, "degraded": True, "errored": errored}
         return {"action": "wait"}
     rp = round_positions(positions, decision["round"])
     all_info = bool(rp) and all(p["position"] == "info" for p in rp)

@@ -29,6 +29,11 @@ def record(conn, decision_id, seat, round_, reason):
         VALUES (%s,'magi','resultado',%s,NULL)""",
         (d['thread'], f"ERROR EN TURNO de {seat}: {reason} No se reintentará automáticamente. "
          'Corrige la causa y usa Reintentar cabezas fallidas. Los votos recibidos se conservan.'))
+    # Con el error anotado, el motor puede cerrar la ronda si los que sí
+    # votaron ya son mayoría y coinciden (import local: board no importa
+    # este módulo, pero lo carga la UI antes que a board).
+    from board import settle_degraded
+    settle_degraded(conn, decision_id)
     return True
 
 

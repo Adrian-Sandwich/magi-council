@@ -320,3 +320,16 @@ def test_repo_lease_blocks_another_executor(repo, pg):
     relay._run_executor_turn(d, repo)
     updated = pg.execute("SELECT * FROM decisions WHERE id = %s", (d["id"],)).fetchone()
     assert updated["minority_report"]["execution_state"] == "reviewing"
+
+
+def test_cleanup_removes_worktrees_and_branch_after_merge(repo):
+    run = implementation(repo)
+    production.merge_reviewed(run, "MAGI reviewed")
+    removed = production.cleanup(run)
+    assert len(removed) == 2
+    assert not Path(run["worktree"]).exists()
+    assert not (Path(production.common_dir(repo)) / "magi-worktrees" / "merge-43").exists()
+    assert production.git(repo, "branch", "--list", run["branch"]) == ""
+    assert "\n" not in production.git(repo, "worktree", "list"), "sólo queda el checkout principal"
+    assert (Path(repo) / "app.txt").read_text() == "implemented\n"
+    assert production.cleanup(run) == [], "segunda poda: nada que hacer"

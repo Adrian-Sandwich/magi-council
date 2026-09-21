@@ -1916,7 +1916,13 @@ def _merge_candidate(conn, candidate: dict) -> None:
                 """INSERT INTO messages (thread, author, kind, body, artifact)
                    VALUES (%s, 'magi', 'resultado', %s, NULL)""", (thread, body),
             )
-
+    if state == "merged":
+        # fuera de la transacción: el merge ya quedó anotado; la poda es limpieza
+        try:
+            removed = production.cleanup(run)
+            log.info("worktrees de #%s podados: %s", orig["id"], ", ".join(removed) or "ninguno")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as exc:
+            log.warning("no pude podar los worktrees de #%s: %s", orig["id"], exc)
 
 
 def _reap_closed_decision_procs(conn) -> None:

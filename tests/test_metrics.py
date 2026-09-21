@@ -143,3 +143,13 @@ def test_quality_summary_cubre_resultados_memoria_tiempo_y_tokens(capsys):
     assert q["head_failures"] == 1
     text = metrics.render_quality(q, 7)
     assert "1/2 (50%)" in text and "útil en 100%" in text and "420s" in text
+
+
+def test_quality_notify_manda_el_resumen_al_sistema(monkeypatch, tmp_path, capsys):
+    import healthcheck
+    sent = []
+    monkeypatch.setattr(metrics, "_load_quality", lambda days: ([], [], []))
+    monkeypatch.setattr(healthcheck, "notify", lambda title, body: sent.append((title, body)))
+    assert metrics.main(["--quality", "--notify", "--events", str(tmp_path / "nada.jsonl")]) == 0
+    assert "resultados reportados" in capsys.readouterr().out
+    assert sent and "calidad" in sent[0][0] and "resultados reportados" in sent[0][1]

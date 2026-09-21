@@ -138,6 +138,14 @@ def record_position(
         conn.execute("UPDATE decisions SET minority_report=minority_report #- %s WHERE id=%s",
                      (['turn_errors', author], decision_id))
     act = decision.advance(d, positions)
+    apply_order(conn, decision_id, d, positions, act)
+    return act, msg["id"]
+
+
+def apply_order(conn, decision_id: int, d: dict, positions: list, act: dict) -> None:
+    """Aplica la orden del motor (cierre, pase a ejecución, ronda nueva,
+    split, evaluación de contenido) a la decisión `d` con sus mensajes.
+    El llamador maneja la transacción."""
     if act["action"] == "close":
         act["mind_changes"] = decision.mind_changes(positions)
         approved_conditions = list(dict.fromkeys(
@@ -146,6 +154,16 @@ def record_position(
             and p["position"] == "conditional"
             for c in (p.get("conditions") or [])
         ))
+        closing = {
+            "minority": act["minority"],
+            "approved_conditions": approved_conditions,
+            "degraded": act.get("degraded", False),
+            "mind_changes": act["mind_changes"],
+        }
+        if act.get("errored"):
+            # cierre con una cabeza en ERROR: el dossier conserva quién faltó y por qué
+            closing["errored"] = act["errored"]
+            closing["turn_errors"] = (d.get("minority_report") or {}).get("turn_errors") or {}
         if decision.debe_ejecutar(d, act):
             # modo producción: no es un cierre, es el pase a ejecución. El
             # relay detecta 'executing', lanza al ejecutor en la rama
@@ -158,12 +176,7 @@ def record_position(
                 WHERE id = %s
                 """,
                 (act["ruling"], act["confidence"],
-                 Json({
-                     "minority": act["minority"],
-                     "approved_conditions": approved_conditions,
-                     "degraded": act.get("degraded", False),
-                     "mind_changes": act["mind_changes"],
-                 }),
+                 Json(closing),
                  decision_id),
             )
         else:
@@ -175,12 +188,7 @@ def record_position(
                 WHERE id = %s
                 """,
                 (act["ruling"], act["confidence"],
-                 Json({
-                     "minority": act["minority"],
-                     "approved_conditions": approved_conditions,
-                     "degraded": act.get("degraded", False),
-                     "mind_changes": act["mind_changes"],
-                 }),
+                 Json(closing),
                  decision_id),
             )
     elif act["action"] == "assess_content":
@@ -224,7 +232,25 @@ def record_position(
             """,
             (d["thread"], consulta_destrabe_texto(d["round"], act["minority"])),
         )
-    return act, msg["id"]
+
+
+def settle_degraded(conn, decision_id: int) -> dict | None:
+    """Tras registrar un turno fallido: si el motor ya puede cerrar la ronda
+    con los votos que hay (lo que falta está en ERROR y los demás coinciden),
+    cierra degradada. Cualquier otra orden espera al reintento del operador.
+    El llamador maneja la transacción."""
+    d = conn.execute("SELECT * FROM decisions WHERE id = %s FOR UPDATE", (decision_id,)).fetchone()
+    if not d or d["status"] != "open":
+        return None
+    positions = conn.execute(
+        "SELECT head, round, position, conditions FROM positions WHERE decision_id = %s",
+        (decision_id,),
+    ).fetchall()
+    act = decision.advance(d, positions)
+    if act["action"] != "close":
+        return None
+    apply_order(conn, decision_id, d, positions, act)
+    return act
 
 
 # Palabras que reabren una decisión en STALEMATE en vez de arbitrarla.
