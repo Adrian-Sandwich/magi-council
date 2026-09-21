@@ -121,6 +121,18 @@ revisar y sintetizar basta una API.
 
 Dependencias: 1 y 3.4 (para medir). Independiente de 2.
 
+**Hecho el 2026-09-21** — 4.1 (`provider` anthropic / openai / moonshot /
+local en `apihead.py`, clave por `api_key_env`, `heads.is_active` exige la
+clave; falta la prueba de punta a punta: no hay claves en el entorno de
+esta máquina todavía), 4.2 (`input_tokens`, `output_tokens`, `cost_usd` y
+`attempts` en cada turno API; `pricing` por asiento; columna **costo** y
+total del período en `metrics.py`), 4.3 (3 intentos con backoff 2·2^n y
+`Retry-After`; 401/400 sin reintento; tests con servidor falso), 4.5
+(cuarentena: tres turnos de voto fallidos seguidos hoy sacan al asiento
+de las decisiones nuevas, con nota en el journal y aviso del healthcheck).
+`heads.example.json` documenta el consejo mixto de 4.4; medirlo contra el
+actual queda para cuando haya claves.
+
 **Adelantado el 2026-09-21** — la mitad de 4.5 que no depende de la API: una
 ronda cuyos asientos faltantes están en ERROR cierra degradada (confianza
 de mayoría, `degraded: true`, `errored` y `turn_errors` en el dossier) cuando

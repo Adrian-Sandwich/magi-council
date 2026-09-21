@@ -74,6 +74,10 @@ def _relay_log_isolated(monkeypatch, tmp_path):
     monkeypatch.setattr(relay, "EVENTS_PATH", tmp_path / "trigger_events.jsonl")
     monkeypatch.setattr(relay, "HEARTBEAT_PATH", tmp_path / "relay_heartbeat.json")
     monkeypatch.setattr(relay, "STATE_PATH", tmp_path / "relay_state.json")
+    import metrics
+    # la cuarentena de asientos (board.start_decision) lee este archivo: sin
+    # esto, tres fallos reales de casper hoy sacarían a casper de los tests
+    monkeypatch.setattr(metrics, "EVENTS_PATH", tmp_path / "trigger_events.jsonl")
 
 
 @pytest.fixture(autouse=True)

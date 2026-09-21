@@ -689,7 +689,7 @@ def _run_api_turn(seat_info: dict, d: dict, memory: str | None = None) -> None:
     def producir_voto(journal):
         system, user = apihead.build_api_prompt(seat_info["seat"], d, journal, memory=memory)
         stats["prompt_chars"] = len(system) + len(user)
-        vote = apihead.run_turn(seat_info, d, journal, memory=memory)
+        vote = apihead.run_turn(seat_info, d, journal, memory=memory, stats=stats)
         stats["output_chars"] = len(vote.get("body") or "")
         return vote
 
@@ -763,7 +763,7 @@ def _run_api_chat_turn(seat_info: dict, thread: str, cwd: str | None = None) -> 
     def producir_texto(journal):
         system, user = apihead.build_chat_prompt(seat_info["seat"], journal, cwd, thread)
         stats["prompt_chars"] = len(system) + len(user)
-        return apihead.run_chat_turn(seat_info, journal, cwd, thread)
+        return apihead.run_chat_turn(seat_info, journal, cwd, thread, stats=stats)
 
     _run_chat_turn(seat_info, thread, producir_texto, "free-api", stats)
 
@@ -1356,7 +1356,7 @@ def _synthesis_invoke(seat, prompt):
     produced = None
     try:
         if seat.get('type') == 'api':
-            produced = apihead.chat(seat['base_url'], seat['model'], apihead._persona(seat['seat']), prompt, 120)
+            produced = apihead.complete(seat, apihead._persona(seat['seat']), prompt, 120)['text']
             return produced
         # cwd fijo por asiento, no un tempdir por invocación: Claude Code
         # registra cada cwd nuevo como proyecto en ~/.claude/projects aunque

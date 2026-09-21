@@ -77,10 +77,11 @@ def seat_names(seats: list[dict] | None = None) -> list[str]:
 
 def is_active(seat: dict) -> bool:
     """Puede dispararse de verdad. CLI: binario presente en disco. API:
-    alcanza con model + base_url (Ollama y compatibles: el "binario" es un
-    server al que se le hace POST)."""
+    model, URL del proveedor y, si el proveedor la pide, la clave en su
+    variable de entorno (un Ollama local no la necesita)."""
     if seat.get("type") == "api":
-        return bool(seat.get("model") and seat.get("base_url"))
+        import apihead  # proveedor, URL y clave: la regla vive junto al cliente
+        return apihead.is_configured(seat)[0]
     return bool(seat.get("bin") and Path(seat["bin"]).exists())
 
 

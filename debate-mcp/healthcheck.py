@@ -301,12 +301,35 @@ def check_seats() -> tuple[str, str]:
                 f"más lento {slowest['seat']}/{slowest['turn']} p95 {_human(slowest['p95_s'])}")
 
 
+def check_api() -> tuple[str, str]:
+    """Asientos API: proveedor, URL y clave presentes; y quién está en
+    cuarentena por fallar seguido hoy (board no lo sienta en decisiones
+    nuevas). Cada problema trae su remedio."""
+    import apihead
+    import heads
+    problems = []
+    api_seats = 0
+    for seat in heads.load():
+        if seat.get("type") != "api":
+            continue
+        api_seats += 1
+        ok, why = apihead.is_configured(seat)
+        if not ok:
+            problems.append(f"{seat['seat']}: {why} — exportala o cambiá `api_key_env` en heads.json")
+    for seat, why in metrics.quarantined_seats().items():
+        problems.append(f"{seat} en cuarentena: {why} — se abre sin él hasta que un turno salga bien")
+    if problems:
+        return WARN, "; ".join(problems)
+    return OK, f"{api_seats} asiento(s) API configurados; nadie en cuarentena"
+
+
 CHECKS = [
     ("postgres", check_postgres),
     ("relay", check_relay),
     ("decisions", check_decisions),
     ("memory-graph", check_graph),
     ("seats", check_seats),
+    ("api", check_api),
 ]
 
 ICON = {OK: "ok  ", WARN: "WARN", CRIT: "CRIT"}

@@ -170,3 +170,19 @@ def test_successful_mcp_vote_is_not_marked_failed(pg):
     board.record_position(pg, did, 'melchior', 'yes', 'Registered via MCP')
     assert not turn_errors.record(pg, did, 'melchior', 1, 'process exited without vote')
     assert not turn_errors.active(row(pg, did))
+
+
+def test_quarantined_seat_is_left_out_of_new_decisions(pg, monkeypatch):
+    import metrics
+    monkeypatch.setattr(metrics, "quarantined_seats", lambda *a, **k: {"casper": "3 turnos de voto fallidos seguidos hoy"})
+    with pg.transaction():
+        opened = board.start_decision(pg, 'Sin casper hoy', artifact=None, protocol='vote')
+    assert opened['seats'] == ['melchior', 'balthasar'] and opened['quarantined'] == ['casper']
+    d = row(pg, opened['decision_id'])
+    assert d['heads'] == ['melchior', 'balthasar'] and d['minority_report']['quarantined'] == ['casper']
+    bodies = [m['body'] for m in pg.execute('SELECT body FROM messages ORDER BY id').fetchall()]
+    assert any(b.startswith('EN CUARENTENA: casper') for b in bodies)
+    # dos votos iguales cierran: la decisión no espera a nadie más
+    board.record_position(pg, opened['decision_id'], 'melchior', 'yes', 'a')
+    board.record_position(pg, opened['decision_id'], 'balthasar', 'yes', 'b')
+    assert row(pg, opened['decision_id'])['status'] == 'closed'

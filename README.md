@@ -32,11 +32,29 @@ single text box, like a CLI. Runs on Windows, macOS and Linux.
      the repo with tools and votes via MCP;
    - **codex** or another plain-text CLI — votes with the journal inlined in
      the prompt (`journal: "inline"` mode);
-   - **Ollama / LM Studio / any OpenAI-compatible endpoint** — local API
-     head at no cost.
+   - **API heads**: `type: "api"` with `provider` **anthropic** (Messages
+     API, `claude-*`), **openai** or **moonshot** (kimi, OpenAI-compatible),
+     the key in the environment variable named by `api_key_env`
+     (defaults `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `MOONSHOT_API_KEY`);
+     or **Ollama / LM Studio / any OpenAI-compatible endpoint** with just
+     `base_url` and `model`, at no cost. An API head votes, reviews and
+     synthesizes over the inlined journal and the repository brief; it
+     cannot run tools. `debate-mcp/heads.example.json` shows a mixed
+     council (one CLI head with tools, two API heads).
    All configured in `debate-mcp/heads.json`; you don't need all three.
 4. Optional: an **OpenAI** account (codex) and/or **Moonshot** (kimi) if you
    use those cloud heads.
+
+API heads report the tokens the provider actually billed; with a
+`pricing` block on the seat (USD per million input/output tokens, copied
+from the provider's price page) `metrics.py` adds a **costo** column and a
+period total, next to the character-based estimates that are all a CLI
+head can offer. 429, 5xx, timeouts and refused connections are retried
+three times with exponential backoff (`Retry-After` wins when present);
+401/400 are configuration errors and fail at once. A seat whose last three
+voting turns of the day all failed is **quarantined**: new decisions open
+without it (journal note, `quarantined` in the dossier, WARN in
+`healthcheck.py`) until one of its turns succeeds or the day changes.
 
 ## Install and first run
 

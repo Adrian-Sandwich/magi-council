@@ -13,16 +13,29 @@ import apihead
 
 
 class _Handler(BaseHTTPRequestHandler):
-    """Devuelve una respuesta OpenAI-compatible fija y guarda el último request."""
+    """Devuelve una respuesta OpenAI-compatible fija y guarda el último request.
+    `script` (lista de (status, cuerpo, headers)) se consume en orden antes
+    de caer en `canned`: sirve para 429 → 200 y compañía."""
     canned = {"choices": [{"message": {"content": "POSITION: yes\nPorque sí."}}]}
+    script: list = []
     last_payload = None
+    last_headers = None
+    last_path = None
+    requests = 0
 
     def do_POST(self):
+        cls = type(self)
         length = int(self.headers.get("Content-Length", 0))
-        type(self).last_payload = json.loads(self.rfile.read(length))
-        body = json.dumps(type(self).canned).encode()
-        self.send_response(200)
+        cls.last_payload = json.loads(self.rfile.read(length))
+        cls.last_headers = {k.lower(): v for k, v in self.headers.items()}  # urllib capitaliza
+        cls.last_path = self.path
+        cls.requests += 1
+        status, payload, extra = cls.script.pop(0) if cls.script else (200, cls.canned, {})
+        body = json.dumps(payload).encode()
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
+        for k, v in extra.items():
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
@@ -31,7 +44,10 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 @pytest.fixture
-def fake_endpoint():
+def fake_endpoint(monkeypatch):
+    _Handler.script = []
+    _Handler.requests = 0
+    monkeypatch.setattr(apihead, "_sleep", lambda s: None)
     server = HTTPServer(("127.0.0.1", 0), _Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{server.server_port}/v1"
@@ -80,9 +96,12 @@ def test_chat_postea_openai_compatible(fake_endpoint):
     assert payload["stream"] is False
 
 
-def test_chat_falla_si_el_endpoint_no_responde():
-    with pytest.raises((urllib.error.URLError, OSError)):
+def test_chat_falla_si_el_endpoint_no_responde(monkeypatch):
+    waits = []
+    monkeypatch.setattr(apihead, "_sleep", waits.append)
+    with pytest.raises((urllib.error.URLError, OSError)) as exc:
         apihead.chat("http://127.0.0.1:1/v1", "qwen3", "s", "u", timeout_secs=2)
+    assert exc.value.attempts == apihead.RETRY_ATTEMPTS and waits == [2.0, 4.0], "backoff exponencial"
 
 
 # ------------------------------------------------------------ prompts y run_turn
@@ -148,3 +167,91 @@ def test_sin_artefacto_no_manda_a_investigar_el_repo():
     assert "NO busques archivos" in sin and "git status" not in sin
     assert "INVESTIGÁ con tus herramientas" in con and "NO busques archivos" not in con
     assert "POSITION: yes|no|conditional|info" in sin
+
+
+# ------------------------------------------------------------ proveedores, reintentos, uso y costo
+
+def _seat(**kw):
+    return {"seat": "casper", "type": "api", "model": "qwen3", **kw}
+
+
+def test_429_y_503_se_reintentan_respetando_retry_after(fake_endpoint, monkeypatch):
+    waits = []
+    monkeypatch.setattr(apihead, "_sleep", waits.append)
+    _Handler.script = [(429, {"error": "rate"}, {"Retry-After": "1"}), (503, {"error": "down"}, {})]
+    result = apihead.complete(_seat(base_url=fake_endpoint), "s", "u", 5)
+    assert result["text"].startswith("POSITION: yes") and result["attempts"] == 3
+    assert waits == [1.0, 4.0], "Retry-After manda; sin él, backoff 2·2^(n-1)"
+    assert _Handler.requests == 3
+
+
+def test_401_no_se_reintenta_y_trae_el_estado(fake_endpoint):
+    _Handler.script = [(401, {"error": {"message": "bad key"}}, {})]
+    with pytest.raises(apihead.ApiError) as exc:
+        apihead.complete(_seat(base_url=fake_endpoint), "s", "u", 5)
+    assert exc.value.status == 401 and exc.value.attempts == 1 and "bad key" in str(exc.value)
+    assert _Handler.requests == 1
+
+
+def test_tres_fallos_seguidos_agotan_los_reintentos(fake_endpoint):
+    _Handler.script = [(500, {}, {}), (502, {}, {}), (504, {}, {})]
+    with pytest.raises(apihead.ApiError) as exc:
+        apihead.complete(_seat(base_url=fake_endpoint), "s", "u", 5)
+    assert exc.value.status == 504 and exc.value.attempts == 3
+
+
+def test_openai_manda_bearer_y_devuelve_uso_y_costo(fake_endpoint, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    _Handler.script = [(200, {"choices": [{"message": {"content": "POSITION: no\nnope"}}],
+                              "usage": {"prompt_tokens": 1200, "completion_tokens": 300}}, {})]
+    seat = _seat(provider="openai", base_url=fake_endpoint, model="gpt-5",
+                 pricing={"input_per_mtok": 2.5, "output_per_mtok": 10})
+    result = apihead.complete(seat, "s", "u", 5)
+    assert _Handler.last_headers["authorization"] == "Bearer sk-test"
+    assert _Handler.last_path.endswith("/chat/completions")
+    assert result["input_tokens"] == 1200 and result["output_tokens"] == 300
+    assert result["cost_usd"] == round(1200 / 1e6 * 2.5 + 300 / 1e6 * 10, 6) and result["provider"] == "openai"
+
+
+def test_anthropic_usa_messages_api_con_x_api_key(fake_endpoint, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    _Handler.script = [(200, {"content": [{"type": "text", "text": "POSITION: conditional\nCONDITIONS: a; b\nok"}],
+                              "usage": {"input_tokens": 800, "output_tokens": 120}}, {})]
+    seat = _seat(provider="anthropic", base_url=fake_endpoint, model="claude-opus-4-1", max_tokens=512)
+    stats = {}
+    vote = apihead.run_turn(seat, {"id": 3, "title": "t", "artifact": None, "protocol": "vote", "round": 1},
+                            [{"author": "adrian", "kind": "analisis", "body": "la pregunta"}], stats=stats)
+    assert _Handler.last_path.endswith("/v1/messages")
+    assert _Handler.last_headers["x-api-key"] == "sk-ant-test" and _Handler.last_headers["anthropic-version"]
+    payload = _Handler.last_payload
+    assert payload["max_tokens"] == 512 and payload["messages"] == [{"role": "user", "content": payload["messages"][0]["content"]}]
+    assert "system" in payload and "casper" in payload["system"].lower() or payload["system"]
+    assert vote["position"] == "conditional" and vote["conditions"] == ["a", "b"]
+    assert stats["input_tokens"] == 800 and stats["output_tokens"] == 120 and stats["cost_usd"] is None
+    assert vote["usage"]["provider"] == "anthropic"
+
+
+def test_is_configured_explica_que_falta(monkeypatch):
+    monkeypatch.delenv("MOONSHOT_API_KEY", raising=False)
+    ok, why = apihead.is_configured(_seat(provider="moonshot", model="kimi-k2"))
+    assert not ok and "MOONSHOT_API_KEY" in why
+    monkeypatch.setenv("MOONSHOT_API_KEY", "x")
+    ok, why = apihead.is_configured(_seat(provider="moonshot", model="kimi-k2"))
+    assert ok and "moonshot" in why
+    assert apihead.provider_of(_seat(provider="moonshot"))["base_url"] == "https://api.moonshot.ai/v1"
+    assert not apihead.is_configured(_seat(model=None))[0]
+    assert not apihead.is_configured(_seat(provider="marciano"))[0]
+    # local (Ollama): base_url y nada de clave
+    assert apihead.is_configured(_seat(base_url="http://127.0.0.1:11434/v1"))[0]
+    with pytest.raises(apihead.ApiError) as exc:
+        apihead.complete(_seat(provider="openai", api_key_env="NO_EXISTE_ESTA_VARIABLE"), "s", "u", 1)
+    assert exc.value.status == 401
+
+
+def test_heads_is_active_para_api_requiere_la_clave(monkeypatch):
+    import heads
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    seat = _seat(provider="anthropic", model="claude-opus-4-1")
+    assert not heads.is_active(seat)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    assert heads.is_active(seat)

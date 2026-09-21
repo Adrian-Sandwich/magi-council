@@ -153,3 +153,39 @@ def test_quality_notify_manda_el_resumen_al_sistema(monkeypatch, tmp_path, capsy
     assert metrics.main(["--quality", "--notify", "--events", str(tmp_path / "nada.jsonl")]) == 0
     assert "resultados reportados" in capsys.readouterr().out
     assert sent and "calidad" in sent[0][0] and "resultados reportados" in sent[0][1]
+
+
+def test_uso_real_y_costo_por_asiento_api(tmp_path, capsys):
+    events = tmp_path / "trigger_events.jsonl"
+    now = datetime.now(timezone.utc).isoformat()
+    _write(events, [
+        {"ts": now, "event": "trigger_done", "author": "casper", "turn": "api", "rc": 0, "duration_s": 12.0,
+         "prompt_chars": 8000, "output_chars": 2000, "input_tokens": 2100, "output_tokens": 500,
+         "cost_usd": 0.0315, "attempts": 3},
+        {"ts": now, "event": "trigger_done", "author": "casper", "turn": "api", "rc": 0, "duration_s": 9.0,
+         "prompt_chars": 4000, "output_chars": 1000, "input_tokens": 1000, "output_tokens": 200,
+         "cost_usd": 0.015, "attempts": 1},
+        {"ts": now, "event": "trigger_done", "author": "melchior", "turn": "cli-inline", "rc": 0, "duration_s": 90.0},
+    ])
+    summary = metrics.summarize(metrics.read_events(events))
+    casper = next(s for s in summary["seats"] if s["seat"] == "casper")
+    assert casper["usage_in_total"] == 3100 and casper["usage_out_total"] == 700 and casper["usage_measured"] == 2
+    assert casper["cost_usd_total"] == 0.0465 and casper["retries"] == 2
+    melchior = next(s for s in summary["seats"] if s["seat"] == "melchior")
+    assert melchior["cost_usd_total"] is None and melchior["usage_measured"] == 0
+    assert metrics.main(["--events", str(events)]) == 0
+    out = capsys.readouterr().out
+    assert "costo" in out and "$0.05" in out and "costo real en el período: $0.05 en 2 turnos API" in out
+
+
+def test_cuarentena_tres_fallos_seguidos_de_voto_hoy():
+    def done(author, rc, turn="api", timed_out=False):
+        return {"event": "trigger_done", "author": author, "turn": turn, "rc": rc, "timed_out": timed_out}
+    events = [done("casper", 1), done("casper", 1), done("casper", 0, timed_out=True),
+              done("melchior", 1), done("melchior", 1), done("melchior", 0),
+              done("balthasar", 1, turn="execute"), done("balthasar", 1, turn="execute"), done("balthasar", 1, turn="execute"),
+              done("kimi", 1, turn="synthesis"), done("kimi", 1, turn="synthesis"), done("kimi", 1, turn="synthesis")]
+    q = metrics.quarantined_seats(events)
+    assert set(q) == {"casper"}, "melchior se recuperó; ejecutor y síntesis no son turnos de voto"
+    assert "3 turnos de voto fallidos" in q["casper"]
+    assert metrics.quarantined_seats([done("casper", 1), done("casper", 1)]) == {}

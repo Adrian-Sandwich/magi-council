@@ -1,0 +1,54 @@
+{
+  "_comment": "Ejemplo de consejo mixto: una cabeza CLI con herramientas (investiga el repo) y dos por API (votan sobre el journal y el mapa del repo). Copiá lo que te sirva a heads.json. Las claves van en variables de entorno, nunca acá. `pricing` es USD por millón de tokens: copiá los precios vigentes de la página de cada proveedor; sin `pricing`, metrics.py muestra tokens pero no costo.",
+  "seats": [
+    {
+      "seat": "melchior",
+      "name": "kimi (API)",
+      "type": "api",
+      "provider": "moonshot",
+      "model": "kimi-k2-0905-preview",
+      "api_key_env": "MOONSHOT_API_KEY",
+      "timeout_secs": 300,
+      "synthesis_priority": 30
+    },
+    {
+      "seat": "balthasar",
+      "name": "codex (gpt-5.6-luna)",
+      "type": "cli",
+      "journal": "inline",
+      "bin": "debate-mcp/bin/codex.cmd",
+      "args": ["exec", "-m", "gpt-5.6-luna", "--sandbox", "workspace-write"],
+      "timeout_secs": 900,
+      "synthesis_priority": 20,
+      "executor": true,
+      "tools": true
+    },
+    {
+      "seat": "casper",
+      "name": "claude (API)",
+      "type": "api",
+      "provider": "anthropic",
+      "model": "claude-opus-4-1",
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "max_tokens": 4096,
+      "timeout_secs": 300,
+      "synthesis_priority": 10
+    }
+  ],
+  "_openai_seat_example": {
+    "seat": "balthasar",
+    "name": "gpt (API)",
+    "type": "api",
+    "provider": "openai",
+    "model": "gpt-5",
+    "api_key_env": "OPENAI_API_KEY",
+    "pricing": {"input_per_mtok": 0, "output_per_mtok": 0}
+  },
+  "_local_seat_example": {
+    "seat": "casper",
+    "name": "qwen local",
+    "type": "api",
+    "base_url": "http://127.0.0.1:11434/v1",
+    "model": "qwen3"
+  }
+}

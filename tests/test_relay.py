@@ -594,7 +594,7 @@ def test_asiento_api_dispara_turno_api_sin_proceso(fired_magi, monkeypatch):
         return {"action": "wait"}, 99
 
     monkeypatch.setattr(relay.board, "record_position", fake_record)
-    monkeypatch.setattr(relay.apihead, "run_turn", lambda seat, d, journal, memory=None: {
+    monkeypatch.setattr(relay.apihead, "run_turn", lambda seat, d, journal, memory=None, stats=None: {
         "position": "yes", "conditions": None, "body": "evidencia en el log",
     })
     monkeypatch.setattr(relay, "connect", lambda: FakeConn([]))
@@ -646,7 +646,7 @@ def test_turno_api_de_chat_publica_un_mensaje_respuesta(fired, monkeypatch):
 
     monkeypatch.setattr(relay, "connect", lambda: _ChatConn([]))
     monkeypatch.setattr(relay.apihead, "run_chat_turn",
-                        lambda seat, journal, artifact=None, thread=None: "sí, yo lo revisaría con calma")
+                        lambda seat, journal, artifact=None, thread=None, stats=None: "sí, yo lo revisaría con calma")
 
     relay._run_api_chat_turn(
         {"seat": "melchior", "model": "qwen", "base_url": "http://x/v1"}, "chat",
@@ -1072,7 +1072,7 @@ def test_turno_api_suelta_la_conexion_mientras_chatea(monkeypatch, tmp_path):
             type(self).abiertas -= 1
             return False
 
-    def fake_run_turn(seat, d, journal, memory=None):
+    def fake_run_turn(seat, d, journal, memory=None, stats=None):
         _TrackedConn.abiertas_durante_chat = _TrackedConn.abiertas
         return {"position": "yes", "conditions": None, "body": "ok"}
 

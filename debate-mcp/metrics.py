@@ -78,7 +78,9 @@ def summarize(events: list[dict]) -> dict:
     - spawn_failures: disparos que ni arrancaron, por causa.
     """
     by_seat: dict[tuple, dict] = defaultdict(lambda: {"durations": [], "errors": 0, "timeouts": 0,
-                                                       "prompt_chars": [], "output_chars": [], "memory_chars": []})
+                                                       "prompt_chars": [], "output_chars": [], "memory_chars": [],
+                                                       "input_tokens": [], "output_tokens": [], "cost_usd": [],
+                                                       "retries": 0})
     round_bounds: dict[tuple, dict] = {}
     round_secs: list[float] = []
     spawn_failures: dict[str, int] = defaultdict(int)
@@ -103,9 +105,12 @@ def summarize(events: list[dict]) -> dict:
         elif kind == "trigger_done":
             seat = by_seat[(e.get("author") or "?", e.get("turn") or "?")]
             seat["durations"].append(float(e.get("duration_s") or 0))
-            for field in ("prompt_chars", "output_chars", "memory_chars"):  # no pisar `key` (decisión, ronda)
+            for field in ("prompt_chars", "output_chars", "memory_chars",
+                          "input_tokens", "output_tokens", "cost_usd"):  # no pisar `key` (decisión, ronda)
                 if isinstance(e.get(field), (int, float)):
                     seat[field].append(float(e[field]))
+            if isinstance(e.get("attempts"), int) and e["attempts"] > 1:
+                seat["retries"] += e["attempts"] - 1  # asientos API: 429/5xx reintentados
             if e.get("timed_out"):
                 seat["timeouts"] += 1
             if e.get("rc") not in (0, None) or e.get("timed_out"):
@@ -128,6 +133,15 @@ def summarize(events: list[dict]) -> dict:
             tokens[f"{name}_tokens_p50"] = round(statistics.median(values) / CHARS_PER_TOKEN) if values else None
             tokens[f"{name}_tokens_total"] = round(sum(values) / CHARS_PER_TOKEN) if values else None
             tokens[f"{name}_measured"] = len(values)
+        # Uso real (asientos API): tokens que cobró el proveedor y costo con
+        # los precios de heads.json. Los CLI no lo exponen: queda None.
+        usage = {
+            "usage_in_total": round(sum(data["input_tokens"])) if data["input_tokens"] else None,
+            "usage_out_total": round(sum(data["output_tokens"])) if data["output_tokens"] else None,
+            "usage_measured": len(data["input_tokens"]),
+            "cost_usd_total": round(sum(data["cost_usd"]), 4) if data["cost_usd"] else None,
+            "retries": data["retries"],
+        }
         seats.append({
             "seat": author, "turn": turn, "n": len(d),
             "p50_s": round(statistics.median(d), 1),
@@ -135,7 +149,7 @@ def summarize(events: list[dict]) -> dict:
             "max_s": round(max(d), 1),
             "errors": data["errors"], "timeouts": data["timeouts"],
             "error_rate": round(data["errors"] / len(d), 3),
-            **tokens,
+            **tokens, **usage,
         })
     for bounds in round_bounds.values():
         close_burst(bounds)
@@ -152,6 +166,34 @@ def _fmt_num(v) -> str:
     return "-" if v is None else f"{v:,}"
 
 
+def _fmt_usd(v) -> str:
+    return "-" if v is None else f"${v:,.2f}"
+
+
+QUARANTINE_STREAK = 3
+VOTING_TURNS = {"answer", "recast", "cli-inline", "api"}
+
+
+def quarantined_seats(events: list[dict] | None = None, streak: int = QUARANTINE_STREAK,
+                      now: datetime | None = None) -> dict[str, str]:
+    """Asientos cuyos últimos `streak` turnos de voto de hoy fallaron todos
+    (rc≠0 o timeout): una clave vencida, un proveedor caído, un límite de
+    sesión. `board.start_decision` no los sienta en decisiones nuevas hasta
+    que un turno salga bien o cambie el día; la decisión se abre degradada
+    en vez de colgarse. {asiento: detalle}."""
+    now = now or datetime.now(timezone.utc)
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if events is None:
+        events = read_events(EVENTS_PATH, since=start)
+    flags: dict[str, list[bool]] = defaultdict(list)
+    for e in events:
+        if e.get("event") != "trigger_done" or not e.get("author") or e.get("turn") not in VOTING_TURNS:
+            continue
+        flags[e["author"]].append(e.get("rc") not in (0, None) or bool(e.get("timed_out")))
+    return {seat: f"{streak} turnos de voto fallidos seguidos hoy"
+            for seat, failed in flags.items() if len(failed) >= streak and all(failed[-streak:])}
+
+
 def _fmt_secs(value) -> str:
     if value is None:
         return "-"
@@ -164,17 +206,26 @@ def render(summary: dict, days: int) -> str:
         lines.append("  sin turnos registrados en el período")
         return "\n".join(lines)
     lines.append(f"  {'asiento':<10} {'turno':<11} {'n':>4} {'p50':>7} {'p95':>7} {'max':>7} {'err':>5} {'t/o':>4} "
-                 f"{'in≈tok':>7} {'out≈tok':>8} {'memoria':>8}")
+                 f"{'in≈tok':>7} {'out≈tok':>8} {'memoria':>8} {'costo':>8}")
     total_in = total_out = 0
+    total_cost = 0.0
+    priced = 0
     for s in summary["seats"]:
         total_in += s.get("in_tokens_total") or 0
         total_out += s.get("out_tokens_total") or 0
+        if s.get("cost_usd_total") is not None:
+            total_cost += s["cost_usd_total"]
+            priced += s.get("usage_measured") or 0
         lines.append(
             f"  {s['seat']:<10} {s['turn']:<11} {s['n']:>4} {_fmt_secs(s['p50_s']):>7} "
             f"{_fmt_secs(s['p95_s']):>7} {_fmt_secs(s['max_s']):>7} "
             f"{s['errors']:>3} {s['error_rate'] * 100:>3.0f}% {s['timeouts']:>4} "
-            f"{_fmt_num(s.get('in_tokens_p50')):>7} {_fmt_num(s.get('out_tokens_p50')):>8} {_fmt_num(s.get('memory_tokens_p50')):>8}"
+            f"{_fmt_num(s.get('in_tokens_p50')):>7} {_fmt_num(s.get('out_tokens_p50')):>8} {_fmt_num(s.get('memory_tokens_p50')):>8} "
+            f"{_fmt_usd(s.get('cost_usd_total')):>8}"
         )
+    if priced:
+        lines.append(f"  costo real en el período: {_fmt_usd(total_cost)} en {priced} turnos API con precio configurado "
+                     f"(tokens cobrados por el proveedor; los CLI no exponen uso)")
     if total_in or total_out:
         lines.append(f"  tokens aproximados en el período: {total_in:,} de entrada / {total_out:,} de salida "
                      f"(4 chars/token; no incluye lo que las cabezas leen con sus herramientas)")

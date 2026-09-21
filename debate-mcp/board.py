@@ -16,6 +16,7 @@ from psycopg.types.json import Json
 
 import decision
 import heads
+import metrics
 
 
 def start_decision(
@@ -40,6 +41,11 @@ def start_decision(
     registry = heads.load()
     known = heads.seat_names(registry)
     participating = list(seats) if seats is not None else heads.seat_names(heads.active_seats(registry))
+    # Un asiento que falló 3 turnos seguidos hoy (clave vencida, proveedor
+    # caído, límite de sesión) no se sienta: la decisión se abre con los
+    # demás, degradada, en vez de colgarse esperando un voto que no llega.
+    quarantined = metrics.quarantined_seats() if seats is None else {}
+    participating = [s for s in participating if s not in quarantined]
     unknown = [s for s in participating if s not in known]
     if unknown:
         raise ValueError(f"asientos desconocidos: {unknown} (válidos: {known})")
@@ -73,7 +79,19 @@ def start_decision(
         "UPDATE decisions SET thread = %s, anchor_id = %s WHERE id = %s",
         (thread, msg["id"], did),
     )
-    return {"decision_id": did, "thread": thread, "seats": participating, "degraded": degraded}
+    if quarantined:
+        conn.execute(
+            """INSERT INTO messages (thread, author, kind, body, artifact)
+               VALUES (%s, 'magi', 'resultado', %s, NULL)""",
+            (thread, "EN CUARENTENA: " + "; ".join(f"{s} ({why})" for s, why in quarantined.items())
+             + ". La decisión se abre sin ese asiento (degradada); vuelve cuando un turno suyo salga bien."),
+        )
+        conn.execute(
+            """UPDATE decisions SET minority_report = COALESCE(minority_report, '{}'::jsonb) || %s::jsonb
+               WHERE id = %s""", (Json({"quarantined": list(quarantined)}), did),
+        )
+    return {"decision_id": did, "thread": thread, "seats": participating, "degraded": degraded,
+            "quarantined": list(quarantined)}
 
 
 def record_position(

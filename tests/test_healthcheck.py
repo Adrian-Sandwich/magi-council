@@ -180,3 +180,21 @@ def test_seats_critico_y_sin_datos(tmp_path, monkeypatch):
     assert status == healthcheck.OK and "sin turnos suficientes" in detail
     monkeypatch.setattr(healthcheck, "EVENTS_PATH", tmp_path / "no-existe.jsonl")
     assert healthcheck.check_seats()[0] == healthcheck.OK
+
+
+def test_api_avisa_clave_faltante_y_cuarentena(monkeypatch):
+    import heads
+    import metrics
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(heads, "load", lambda: [
+        {"seat": "casper", "type": "api", "provider": "anthropic", "model": "claude-opus-4-1"},
+        {"seat": "melchior", "type": "cli", "bin": "x"},
+    ])
+    monkeypatch.setattr(metrics, "quarantined_seats", lambda *a, **k: {"melchior": "3 turnos de voto fallidos seguidos hoy"})
+    status, detail = healthcheck.check_api()
+    assert status == healthcheck.WARN
+    assert "casper: falta la variable ANTHROPIC_API_KEY" in detail and "melchior en cuarentena" in detail
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    monkeypatch.setattr(metrics, "quarantined_seats", lambda *a, **k: {})
+    status, detail = healthcheck.check_api()
+    assert status == healthcheck.OK and "1 asiento(s) API" in detail
