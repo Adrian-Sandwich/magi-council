@@ -131,7 +131,12 @@ total del período en `metrics.py`), 4.3 (3 intentos con backoff 2·2^n y
 (cuarentena: tres turnos de voto fallidos seguidos hoy sacan al asiento
 de las decisiones nuevas, con nota en el journal y aviso del healthcheck).
 `heads.example.json` documenta el consejo mixto de 4.4; medirlo contra el
-actual queda para cuando haya claves.
+actual queda para cuando haya claves. Decisión del 2026-09-21: no comprar
+claves todavía. Las suscripciones no sirven como API, pero los CLIs sí
+reportan uso en JSON: casper corre con `output_format: claude-json`
+(tokens y costo a precio de lista) y balthasar con `codex-jsonl` (tokens);
+kimi no reporta nada. Con dos semanas de datos en `metrics.py` se decide si
+algún asiento justifica pagar API.
 
 **Adelantado el 2026-09-21** — la mitad de 4.5 que no depende de la API: una
 ronda cuyos asientos faltantes están en ERROR cierra degradada (confianza

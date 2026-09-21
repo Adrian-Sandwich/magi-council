@@ -186,3 +186,38 @@ def test_quarantined_seat_is_left_out_of_new_decisions(pg, monkeypatch):
     board.record_position(pg, opened['decision_id'], 'melchior', 'yes', 'a')
     board.record_position(pg, opened['decision_id'], 'balthasar', 'yes', 'b')
     assert row(pg, opened['decision_id'])['status'] == 'closed'
+
+
+def test_cli_json_output_feeds_real_usage_into_stats(tmp_path, allow_real_processes):
+    """casper en modo `claude-json`: el relay agrega el flag, saca el voto del
+    campo `result` y deja tokens y costo reales en las stats del turno (lo que
+    metrics.py convierte en la columna costo, sin claves API)."""
+    stub = tmp_path / 'fake_claude.py'
+    stub.write_text("import sys, json\n"
+                    "args = sys.argv[1:]\n"
+                    "assert args[-2:] == ['--output-format', 'json'], args\n"
+                    "sys.stdin.read()\n"
+                    "print('[stderr-ish] warning line')\n"
+                    "print(json.dumps({'type': 'result', 'subtype': 'success', 'is_error': False,\n"
+                    "                  'result': 'POSITION: yes\\nvisto', 'total_cost_usd': 0.05,\n"
+                    "                  'usage': {'input_tokens': 10, 'cache_creation_input_tokens': 990,\n"
+                    "                            'cache_read_input_tokens': 0, 'output_tokens': 7}}))\n",
+                    encoding='utf-8')
+    seat = {'seat': 'casper', 'type': 'cli', 'bin': sys.executable, 'args': [str(stub)],
+            'prompt_transport': 'stdin-only', 'output_format': 'claude-json'}
+    stats = {}
+    text = relay._run_cli_inline(seat, 'prompt de prueba', str(tmp_path), 30, token='d9::casper', stats=stats)
+    assert text == 'POSITION: yes\nvisto'
+    assert stats == {'input_tokens': 1000, 'output_tokens': 7, 'cached_input_tokens': 0, 'cost_usd': 0.05}
+
+
+def test_cli_json_is_error_with_rc_zero_fails_the_turn(tmp_path, allow_real_processes):
+    stub = tmp_path / 'fake_claude.py'
+    stub.write_text("import sys, json\n"
+                    "sys.stdin.read()\n"
+                    "print(json.dumps({'type': 'result', 'subtype': 'error', 'is_error': True,\n"
+                    "                  'result': \"You've hit your session limit\"}))\n", encoding='utf-8')
+    seat = {'seat': 'casper', 'type': 'cli', 'bin': sys.executable, 'args': [str(stub)],
+            'prompt_transport': 'stdin-only', 'output_format': 'claude-json'}
+    with pytest.raises(RuntimeError, match='session limit'):
+        relay._run_cli_inline(seat, 'prompt', str(tmp_path), 30, token='d9::casper', stats={})

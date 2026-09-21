@@ -29,7 +29,8 @@
       "timeout_secs": 900,
       "synthesis_priority": 20,
       "executor": true,
-      "tools": true
+      "tools": true,
+      "output_format": "codex-jsonl"
     },
     {
       "seat": "casper",
@@ -53,7 +54,8 @@
       ],
       "timeout_secs": 900,
       "synthesis_priority": 10,
-      "tools": true
+      "tools": true,
+      "output_format": "claude-json"
     }
   ]
 }

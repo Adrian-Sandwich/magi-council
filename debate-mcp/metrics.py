@@ -224,8 +224,8 @@ def render(summary: dict, days: int) -> str:
             f"{_fmt_usd(s.get('cost_usd_total')):>8}"
         )
     if priced:
-        lines.append(f"  costo real en el período: {_fmt_usd(total_cost)} en {priced} turnos API con precio configurado "
-                     f"(tokens cobrados por el proveedor; los CLI no exponen uso)")
+        lines.append(f"  costo real en el período: {_fmt_usd(total_cost)} en {priced} turnos con uso reportado "
+                     f"(API con `pricing`, o claude en modo json a precio de lista; kimi no reporta uso)")
     if total_in or total_out:
         lines.append(f"  tokens aproximados en el período: {total_in:,} de entrada / {total_out:,} de salida "
                      f"(4 chars/token; no incluye lo que las cabezas leen con sus herramientas)")

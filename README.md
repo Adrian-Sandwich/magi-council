@@ -45,7 +45,12 @@ single text box, like a CLI. Runs on Windows, macOS and Linux.
 4. Optional: an **OpenAI** account (codex) and/or **Moonshot** (kimi) if you
    use those cloud heads.
 
-API heads report the tokens the provider actually billed; with a
+CLI heads can report real usage too, with the accounts you already have:
+`"output_format": "claude-json"` on a claude seat and `"codex-jsonl"` on
+a codex seat make the relay ask for JSON, take the answer from it and
+record the tokens of the turn (claude also gives its list-price cost; the
+22k-token context the CLI loads on every start is part of it). kimi has no
+usage output. API heads report the tokens the provider actually billed; with a
 `pricing` block on the seat (USD per million input/output tokens, copied
 from the provider's price page) `metrics.py` adds a **costo** column and a
 period total, next to the character-based estimates that are all a CLI

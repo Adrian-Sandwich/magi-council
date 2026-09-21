@@ -772,7 +772,7 @@ def test_cabeza_inline_con_tools_investiga_antes_de_votar(fired_magi, monkeypatc
     queda sesgado a lo que esa cabeza ve."""
     prompts = {}
 
-    def fake_run(seat_info, prompt, cwd, timeout, token=None):
+    def fake_run(seat_info, prompt, cwd, timeout, token=None, stats=None):
         prompts[seat_info["seat"]] = prompt
         return "POSITION: yes\n\nvi el repo, voto si"
 
@@ -828,7 +828,7 @@ def test_journal_inline_caps_large_agent_outputs():
 def test_synthesis_does_not_duplicate_configured_sandbox(monkeypatch):
     seen = {}
 
-    def fake_run(config, prompt, cwd, timeout, token=None):
+    def fake_run(config, prompt, cwd, timeout, token=None, stats=None):
         seen["args"] = config["args"]
         output = config["args"][config["args"].index("--output-last-message") + 1]
         Path(output).write_text("synthesis ok", encoding="utf-8")
@@ -1147,7 +1147,7 @@ def test_la_sintesis_usa_un_cwd_estable_por_asiento(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     cwds = []
 
-    def fake_run(config, prompt, cwd, timeout, token=None):
+    def fake_run(config, prompt, cwd, timeout, token=None, stats=None):
         cwds.append(cwd)
         return "ok"
 
@@ -1258,7 +1258,7 @@ def test_el_turno_inline_registra_tamano_de_prompt_salida_y_memoria(monkeypatch,
     """Para metrics.py: sin esto sólo sabíamos cuánto tardaba una cabeza, no
     cuánto leía ni cuánto escribía."""
     _isolate(monkeypatch, tmp_path)
-    monkeypatch.setattr(relay, "_run_cli_inline", lambda seat, prompt, cwd, timeout, token=None: "POSITION: yes\n" + "x" * 500)
+    monkeypatch.setattr(relay, "_run_cli_inline", lambda seat, prompt, cwd, timeout, token=None, stats=None: "POSITION: yes\n" + "x" * 500)
     monkeypatch.setattr(relay.board, "record_position", lambda *a, **kw: ({"action": "wait"}, 1))
     monkeypatch.setattr(relay, "connect", lambda: FakeConn([]))
     seat = {"seat": "balthasar", "name": "codex", "type": "cli", "journal": "inline", "tools": True,

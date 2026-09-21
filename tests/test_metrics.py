@@ -175,7 +175,7 @@ def test_uso_real_y_costo_por_asiento_api(tmp_path, capsys):
     assert melchior["cost_usd_total"] is None and melchior["usage_measured"] == 0
     assert metrics.main(["--events", str(events)]) == 0
     out = capsys.readouterr().out
-    assert "costo" in out and "$0.05" in out and "costo real en el período: $0.05 en 2 turnos API" in out
+    assert "costo" in out and "$0.05" in out and "costo real en el período: $0.05 en 2 turnos con uso reportado" in out
 
 
 def test_cuarentena_tres_fallos_seguidos_de_voto_hoy():

@@ -70,6 +70,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import psycopg  # noqa: E402
 
 import apihead  # noqa: E402
+import cli_output  # noqa: E402
 import board  # noqa: E402
 import memory_ctx  # noqa: E402
 import memory_sync  # noqa: E402
@@ -798,13 +799,18 @@ FAST_CRASH_RETRY_DELAY = 3
 
 
 def _run_cli_inline(seat_info: dict, prompt: str, cwd: str, timeout: int,
-                    token: str | None = None, _retried: bool = False) -> str:
+                    token: str | None = None, _retried: bool = False,
+                    stats: dict | None = None) -> str:
     """Corre una cabeza CLI con el prompt por STDIN (archivo temporal) y
     devuelve su stdout completo. STDIN en vez de argv: los prompts de turno
     tienen comillas y tildes que el re-quoting de shims .cmd (codex.cmd)
     rompería; y `codex exec -` lee el prompt de stdin de todos modos. Si
-    pasa un token, el proceso queda registrado para poder abortarlo."""
+    pasa un token, el proceso queda registrado para poder abortarlo. Con
+    `output_format` en el asiento (claude-json, codex-jsonl) el CLI
+    responde en JSON: se devuelve el texto de la respuesta y `stats`
+    recibe los tokens y el costo reales."""
     started = time.monotonic()
+    output_format = seat_info.get("output_format")
     # Directorio estable por thread+asiento en vez de un tempdir por turno:
     # en Windows la limpieza del tempdir puede fallar (WinError 32) mientras
     # el CLI o un hijo suyo todavía tiene el archivo abierto, y esa excepción
@@ -816,7 +822,7 @@ def _run_cli_inline(seat_info: dict, prompt: str, cwd: str, timeout: int,
     pout = Path(tmp) / "out.txt"
     pin.write_text(prompt, encoding="utf-8")
     with pin.open("rb") as fin, pout.open("wb") as fout:
-        command = [seat_info["bin"], *seat_info.get("args", [])]
+        command = [seat_info["bin"], *seat_info.get("args", []), *cli_output.flags(output_format)]
         transport = seat_info.get('prompt_transport', 'stdin')
         if transport == 'file':
             command.append(f'Read the UTF-8 task file at {pin} and follow its instructions. '
@@ -852,7 +858,16 @@ def _run_cli_inline(seat_info: dict, prompt: str, cwd: str, timeout: int,
                 fout.flush()
                 log_path.write_bytes(pout.read_bytes())
                 _prune_trigger_logs(prefix)
-    text = _decode_cli_output(pout.read_bytes())
+    parsed = cli_output.parse(output_format, _decode_cli_output(pout.read_bytes()))
+    text = parsed["text"]
+    if stats is not None and parsed["input_tokens"] is not None:
+        stats.update(input_tokens=parsed["input_tokens"], output_tokens=parsed["output_tokens"],
+                     cached_input_tokens=parsed["cached_input_tokens"],
+                     cost_usd=parsed["cost_usd"] if parsed["cost_usd"] is not None
+                     else apihead.cost_usd(seat_info, parsed["input_tokens"], parsed["output_tokens"]))
+    if parsed["error"] and rc == 0:
+        # claude devuelve rc=0 con is_error en algunos fallos (límite de sesión)
+        raise RuntimeError(f"{seat_info['seat']} reportó error: {parsed['error'][-300:]}")
     if rc != 0:
         elapsed = time.monotonic() - started
         if not _retried and elapsed < FAST_CRASH_SECS and not text.strip():
@@ -861,8 +876,8 @@ def _run_cli_inline(seat_info: dict, prompt: str, cwd: str, timeout: int,
             event("trigger_fast_crash", token=token, author=seat_info["seat"], rc=rc,
                   thread=token.split("::", 1)[0] if token else None, duration_s=round(elapsed, 1))
             time.sleep(FAST_CRASH_RETRY_DELAY)
-            return _run_cli_inline(seat_info, prompt, cwd, timeout, token, _retried=True)
-        raise RuntimeError(f"{seat_info['seat']} salió rc={rc}: {text[-300:]}")
+            return _run_cli_inline(seat_info, prompt, cwd, timeout, token, _retried=True, stats=stats)
+        raise RuntimeError(f"{seat_info['seat']} salió rc={rc}: {(parsed['error'] or text)[-300:]}")
     return text
 
 
@@ -902,7 +917,7 @@ def _run_cli_inline_turn(seat_info: dict, d: dict, cwd: str, memory: str | None 
         text = _run_cli_inline(
             seat_info, prompt, cwd,
             seat_info.get("timeout_secs", AGENT_TIMEOUT_SECS),
-            token=_token(d["thread"], seat_info["seat"]),
+            token=_token(d["thread"], seat_info["seat"]), stats=stats,
         )
         stats["output_chars"] = len(text)
         return apihead.parse_vote(apihead.strip_echo(text, prompt))
@@ -944,7 +959,7 @@ def _run_cli_inline_chat_turn(seat_info: dict, thread: str, cwd: str) -> None:
         text = _run_cli_inline(
             seat_info, prompt, cwd,
             seat_info.get("timeout_secs", AGENT_TIMEOUT_SECS),
-            token=_token(thread),
+            token=_token(thread), stats=stats,
         )
         stats["output_chars"] = len(text)
         return apihead.strip_echo(text, prompt).strip()
