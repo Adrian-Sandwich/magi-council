@@ -63,19 +63,35 @@ without it (journal note, `quarantined` in the dossier, WARN in
 
 ## Install and first run
 
+One step, idempotent (run it again to repair a half-finished install):
+
 ```bash
 git clone https://github.com/Adrian-Sandwich/magi-council.git
-cd magi-council/debate-mcp
+cd magi-council
 
-# venv (Windows: .venv\Scripts\python -m venv .venv)
-python3.14 -m venv .venv && .venv/bin/pip install -r requirements.txt
+# Windows: venv, dependencies, database, schema, heads.json, diagnostics
+powershell -ExecutionPolicy Bypass -File install.ps1
+#   -WithPostgres  downloads a portable Postgres (~350 MB) and creates the cluster
+#   -Schedule      registers startup, healthcheck and the weekly quality panel
 
-# database (idempotent; creates the schema or applies what's missing)
-.venv/bin/python schema/migrate.py
-
-# all good? (needs Postgres up)
-.venv/bin/python smoke_test.py
+# macOS/Linux (uses your local Postgres, or DEBATE_CONNINFO)
+./install.sh --start
 ```
+
+It ends by running the **doctor**, which is also how you debug a machine
+that won't start: every problem comes with the command that fixes it.
+
+```bash
+debate-mcp/.venv/bin/python debate-mcp/doctor.py     # install: venv, DB, seats, permissions
+debate-mcp/.venv/bin/python debate-mcp/healthcheck.py # running system: Postgres, relay, graph
+```
+
+The **Diagnóstico** button in the UI toolbar runs the doctor without a
+terminal. `docs/operacion.md` is the runbook: what to do when Postgres is
+down, the relay freezes, a head is in ERROR, a merge is pending or the
+graph goes stale — every healthcheck alert links to its section. The
+manual path (venv, `schema/migrate.py`, `smoke_test.py`) still works and
+is what the installer runs underneath.
 
 Per-OS shortcuts:
 
@@ -86,8 +102,11 @@ Per-OS shortcuts:
   processes are created through WMI, so they do not belong to the console
   (or agent session) that started them and survive its closing.
   `debate-mcp\bin\stop-magi.bat` shuts everything down.
-- **macOS/Linux**: `.venv/bin/python relay.py` and `.venv/bin/python magi_ui.py`
-  (daemonize them as you like; `launchd/install.sh` is the macOS way).
+- **macOS/Linux**: `./install.sh --start`, or `.venv/bin/python relay.py`
+  and `.venv/bin/python magi_ui.py` by hand. `debate-mcp/launchd/*.plist`
+  are templates for launchd (relay, healthcheck and graph refresh); they
+  have not been re-tested since the monorepo move, so treat them as a
+  starting point, not a finished install.
 
 Then open **http://127.0.0.1:8051**.
 

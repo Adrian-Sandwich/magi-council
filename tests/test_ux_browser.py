@@ -437,3 +437,30 @@ def test_resultado_rapido_de_la_decision_anterior_al_abrir_una_nueva(page):
     assert page.locator("#outcome-prompt").is_visible()
     page.locator("#outcome-prompt button.later").click()
     assert page.locator("#outcome-prompt").is_hidden() and len(sent) == 1
+
+
+def test_boton_diagnostico_muestra_chequeos_y_remedios(page):
+    """El operador no tiene por qué abrir una terminal en el venv para saber
+    por qué no arranca: el botón corre doctor.py y muestra cada remedio."""
+    feed(page, snapshot())
+    page.route("**/doctor", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=json.dumps({"status": "warn", "checks": [
+            {"check": "postgres", "status": "ok", "detail": "Postgres responde; esquema v6", "remedy": ""},
+            {"check": "asientos", "status": "warn", "detail": "melchior: sin binario",
+             "remedy": "instalá el CLI o corregí `bin` en heads.json"},
+        ]})))
+    page.get_by_role("button", name="Diagnóstico").click()
+    modal = page.locator("#modal")
+    assert modal.is_visible()
+    assert "DIAGNÓSTICO DEL SISTEMA" in page.locator("#modal-title").inner_text()
+    # el modal abre sincrónico, pero las filas llegan después del fetch
+    page.wait_for_selector(".doctor-row")
+    rows = page.locator(".doctor-row")
+    assert rows.count() == 2
+    assert "Postgres responde" in rows.nth(0).inner_text()
+    assert page.locator(".doctor-row.ok .doctor-remedy").count() == 0, "lo que está bien no pide remedio"
+    warn = rows.nth(1)
+    assert "AVISO" in warn.inner_text() and "sin binario" in warn.inner_text()
+    assert "heads.json" in warn.locator(".doctor-remedy").inner_text()
+    page.locator("#modal-close").click()
+    assert page.locator("#modal").is_hidden()

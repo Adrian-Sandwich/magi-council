@@ -441,6 +441,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": "token inválido o ausente"}, 403)
                 return
             self._fs()
+        elif path == "/doctor":
+            if not self._token_ok():
+                self._send_json({"error": "token inválido o ausente"}, 403)
+                return
+            # diagnóstico de instalación desde la UI: la alternativa era
+            # pedirle al operador que abriera una terminal en el venv
+            import doctor
+            self._send_json(doctor.run())
         elif path == "/state":
             if not self._token_ok():
                 self._send_json({"error": "token inválido o ausente"}, 403)

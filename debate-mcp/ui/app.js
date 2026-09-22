@@ -966,6 +966,38 @@ function openModal(seat) {
   document.getElementById("modal").showModal();
 }
 
+// ------------------------------------------------------------- diagnóstico
+
+const DOCTOR_LABEL = {ok: "OK", warn: "AVISO", crit: "CRÍTICO"};
+
+function renderDoctor(report) {
+  const rows = (report?.checks || []).map(check => {
+    const status = DOCTOR_LABEL[check.status] || String(check.status || "").toUpperCase();
+    const remedy = check.status === "ok" || !check.remedy ? ""
+      : `<div class="doctor-remedy">${esc(check.remedy)}</div>`;
+    return `<li class="doctor-row ${esc(check.status)}"><span class="doctor-status">${esc(status)}</span><span class="doctor-name">${esc(check.check)}</span><span class="doctor-detail">${esc(check.detail)}${remedy}</span></li>`;
+  }).join("");
+  return `<ul class="doctor-list">${rows}</ul>`;
+}
+
+document.getElementById("doctor-run").addEventListener("click", async () => {
+  const button = document.getElementById("doctor-run");
+  document.getElementById("modal-title").textContent = "DIAGNÓSTICO DEL SISTEMA";
+  document.getElementById("modal-content").innerHTML = "<p>Revisando…</p>";
+  document.getElementById("modal").showModal();
+  button.disabled = true;
+  try {
+    const response = await fetch("/doctor", {headers: {"X-Magi-Token": window.MAGI_TOKEN}});
+    const report = await response.json();
+    document.getElementById("modal-content").innerHTML = renderDoctor(report);
+  } catch (error) {
+    document.getElementById("modal-content").textContent =
+      "No pude correr el diagnóstico: " + (error?.message || error);
+  } finally {
+    button.disabled = false;
+  }
+});
+
 document.getElementById("modal-close").addEventListener("click", () => {
   document.getElementById("modal").close();
 });

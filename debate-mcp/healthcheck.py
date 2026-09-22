@@ -334,6 +334,17 @@ CHECKS = [
 
 ICON = {OK: "ok  ", WARN: "WARN", CRIT: "CRIT"}
 
+# Una alerta sin remedio es ruido: cada chequeo que falla apunta a su
+# sección del manual de operación.
+RUNBOOK = {
+    "postgres": "docs/operacion.md#postgres-caido",
+    "relay": "docs/operacion.md#relay-congelado",
+    "decisions": "docs/operacion.md#decision-trabada",
+    "memory-graph": "docs/operacion.md#grafo-viejo",
+    "seats": "docs/operacion.md#asiento-degradado",
+    "api": "docs/operacion.md#api-y-cuarentena",
+}
+
 
 def notify(title: str, body: str) -> None:
     """Aviso al operador cuando algo se rompe. macOS: notificación nativa vía
@@ -378,6 +389,8 @@ def main() -> int:
             status, detail = fn()
         except Exception as exc:  # un check roto no puede tumbar el reporte
             status, detail = CRIT, f"el chequeo falló: {exc!r}"
+        if status != OK and name in RUNBOOK:
+            detail = f"{detail} → {RUNBOOK[name]}"
         results.append((name, status, detail))
         if _RANK[status] > _RANK[worst]:
             worst = status

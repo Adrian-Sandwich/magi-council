@@ -726,3 +726,22 @@ dialog::backdrop { background: #000b; }
   .continuation-card dd { margin-bottom: 8px; }
   .detail-panel > summary span { display: block; margin: 5px 0 0 20px; }
 }
+
+/* diagnóstico de instalación (botón Diagnóstico → modal) */
+.doctor-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.doctor-row { display: grid; grid-template-columns: 72px 104px 1fr; gap: 10px; align-items: baseline;
+  border-left: 3px solid #4a341c; padding-left: 10px; }
+.doctor-row.ok { border-left-color: #6fbf73; }
+.doctor-row.warn { border-left-color: #ff8d00; }
+.doctor-row.crit { border-left-color: #ff4d4d; }
+.doctor-status { font-size: 11px; letter-spacing: .08em; color: #c4aa89; }
+.doctor-row.warn .doctor-status { color: #ff8d00; }
+.doctor-row.crit .doctor-status { color: #ff4d4d; }
+.doctor-name { color: #ff8d00; }
+.doctor-detail { overflow-wrap: anywhere; }
+.doctor-remedy { margin-top: 4px; color: #b7d2b9; font-size: 12px; }
+.doctor-remedy::before { content: "↳ "; }
+@media (max-width: 720px) {
+  .doctor-row { grid-template-columns: 64px 1fr; }
+  .doctor-row .doctor-detail { grid-column: 1 / -1; }
+}

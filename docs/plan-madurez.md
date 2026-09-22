@@ -157,6 +157,17 @@ falla 3 veces en el día.
 
 Dependencias: 1. Se puede empezar en paralelo; 5.1 conviene después de 4 para que el ejemplo de `heads.json` incluya asientos API.
 
+**Hecho el 2026-09-21** — 5.1 (`install.ps1` e `install.sh`: venv,
+dependencias, base, esquema, `heads.json` de ejemplo, tareas con
+`-Schedule` y Postgres portátil con `-WithPostgres`; idempotentes, probados
+sobre esta instalación — falta la VM limpia), 5.2 (`doctor.py`: ocho
+chequeos con remedio, `--json`, botón **Diagnóstico** en la UI y corrida
+automática al arrancar), 5.3 (`docs/operacion.md` con una sección por
+alerta; `healthcheck.py` enlaza cada una y un test verifica que el ancla
+exista), 5.4 (el README ya no promete un `launchd/install.sh` que no
+existe: los plist quedan como plantillas sin probar) y 5.5 (`CHANGELOG.md`
+y etiqueta `v0.1`).
+
 ## Orden propuesto y calendario
 
 ```

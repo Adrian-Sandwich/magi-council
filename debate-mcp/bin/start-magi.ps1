@@ -56,6 +56,9 @@ try {
             Start-Detached "`"$python`" `"$path`"" "$logs/$name.stdout.log" "$logs/$name.stderr.log" | Out-Null
         }
     }
+    # Diagnostico al arrancar: imprime solo si algo esta mal (cabeza sin
+    # binario, tarea sin agendar). No bloquea: MAGI corre degradado.
+    & $python "$app/doctor.py" --quiet
     $ready = $false
     for ($i = 0; $i -lt 30; $i++) {
         try {

@@ -1,6 +1,8 @@
 """Tests del healthcheck: ninguno toca Postgres ni el heartbeat reales —
 los checks se pisan con stubs y sys.argv se controla por monkeypatch."""
 
+from pathlib import Path
+
 import pytest
 
 import healthcheck
@@ -198,3 +200,23 @@ def test_api_avisa_clave_faltante_y_cuarentena(monkeypatch):
     monkeypatch.setattr(metrics, "quarantined_seats", lambda *a, **k: {})
     status, detail = healthcheck.check_api()
     assert status == healthcheck.OK and "1 asiento(s) API" in detail
+
+
+def test_cada_alerta_enlaza_su_seccion_del_manual(monkeypatch, capsys):
+    """Un WARN sin remedio es ruido. El operador tiene que saber adónde ir:
+    la alerta lleva el ancla de docs/operacion.md, y el toast también."""
+    manual = (Path(healthcheck.__file__).resolve().parents[1] / "docs" / "operacion.md").read_text(encoding="utf-8")
+    for check, link in healthcheck.RUNBOOK.items():
+        assert f"## {link.split('#')[1]}" in manual, f"{check} apunta a una sección que no existe"
+    avisos = []
+    monkeypatch.setattr(healthcheck, "notify", lambda title, body: avisos.append(body))
+    monkeypatch.setattr(healthcheck, "CHECKS", [
+        ("postgres", lambda: (healthcheck.CRIT, "postgres inalcanzable")),
+        ("seats", lambda: (healthcheck.OK, "todo bien")),
+    ])
+    monkeypatch.setattr("sys.argv", ["healthcheck.py", "--notify"])
+    assert healthcheck.main() == 2
+    out = capsys.readouterr().out
+    assert "docs/operacion.md#postgres-caido" in out
+    assert "todo bien →" not in out, "lo que está bien no manda a leer el manual"
+    assert avisos and "docs/operacion.md#postgres-caido" in avisos[0]
