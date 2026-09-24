@@ -7,6 +7,9 @@ relay_state.json.tmp
 memory.db*
 *.kgraph.json
 
+# volcados del tablero (backup.py): 1,3 MB por dia, no van al repo
+debate-mcp/backups/
+
 # backups que dejan install.sh y migrate_paths.py antes de tocar producción
 debate-mcp/launchd/backup/
 *.bak-*

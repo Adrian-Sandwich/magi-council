@@ -3,6 +3,21 @@
 Formato: lo que cambió para quien **usa** MAGI, no un volcado de commits.
 El detalle línea por línea está en `git log`.
 
+## Sin publicar
+
+- **Licencia MIT** (`LICENSE`): el repositorio es público desde el 2026-09-13
+  y hasta ahora, sin licencia, nadie podía usarlo legalmente.
+- **Respaldo del tablero** (`backup.py`): volcado comprimido y verificado a
+  `debate-mcp/backups/`, rotación de 14, tarea diaria en Windows y chequeo de
+  antigüedad en `doctor.py`. Restauración probada: 4 s para 66 decisiones.
+- **kimi también reporta en JSON** (`kimi-stream-json`): su voto deja de
+  arrastrar el banner de versión y el eco del prompt. Los flags de formato se
+  colocan donde cada CLI los acepta.
+- **El experimento de personas corre con las tres cabezas reales**
+  (`persona_ab.py --mixed`) y ya no cuenta como deliberaciones los planes
+  mecánicos del ejecutor.
+- `docs/plan-v0.2.md`: qué falta para que esto sea real.
+
 ## v0.1 — 2026-09-21
 
 Primera versión etiquetada. El consejo delibera, ejecuta planes en un

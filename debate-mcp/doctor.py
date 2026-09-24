@@ -175,6 +175,14 @@ def check_graph() -> tuple[str, str, str]:
     return OK, f"grafo de memoria presente ({size_mb:.1f} MB)", ""
 
 
+def check_backup() -> tuple[str, str, str]:
+    """Postgres es lo único irreemplazable: el grafo se reconstruye y los
+    worktrees son temporales. Sin respaldo reciente, un disco roto se lleva
+    todas las decisiones."""
+    import backup
+    return backup.check()
+
+
 def check_schedules() -> tuple[str, str, str]:
     """Lo que mantiene a MAGI vivo sin que nadie mire: arranque al iniciar
     sesión, healthcheck, refresh del grafo, panel semanal."""
@@ -183,6 +191,7 @@ def check_schedules() -> tuple[str, str, str]:
     import subprocess
     wanted = {
         "ClaMi-healthcheck": "powershell -ExecutionPolicy Bypass -File debate-mcp\\bin\\schedule-healthcheck.ps1",
+        "ClaMi-backup": "powershell -ExecutionPolicy Bypass -File debate-mcp\\bin\\schedule-backup.ps1",
         "ClaMi-memory-refresh": "ver docs/operacion.md (refresh del grafo de memoria)",
         "ClaMi-quality": "powershell -ExecutionPolicy Bypass -File debate-mcp\\bin\\schedule-quality.ps1",
     }
@@ -201,7 +210,7 @@ def check_schedules() -> tuple[str, str, str]:
         missing.append("arranque al iniciar sesión (powershell -ExecutionPolicy Bypass -File debate-mcp\\bin\\schedule-magi.ps1)")
     if missing:
         return WARN, "sin agendar: " + "; ".join(missing), "instalá lo que falte con los comandos de arriba"
-    return OK, "arranque, healthcheck, refresh y panel semanal agendados", ""
+    return OK, "arranque, healthcheck, respaldo, refresh y panel semanal agendados", ""
 
 
 CHECKS = [
@@ -212,6 +221,7 @@ CHECKS = [
     ("asientos", check_seats),
     ("semantica", check_semantic),
     ("memoria", check_graph),
+    ("respaldo", check_backup),
     ("agendado", check_schedules),
 ]
 

@@ -199,12 +199,42 @@ Seis chequeos: `postgres`, `relay`, `decisions`, `memory-graph`, `seats` y
 `--quiet` sólo imprime cuando algo falla, que es como corre la tarea
 programada cada 15 minutos; `--notify` agrega el toast.
 
-## backups
+## respaldo
 
 Lo único irreemplazable es Postgres: las decisiones, el journal, los votos y
 los resultados. El grafo de memoria se reconstruye desde cero con
 `refresh.sh`, y los worktrees son temporales.
 
 ```bash
-pg_dump -h 127.0.0.1 debate > backup-$(date +%Y%m%d).sql
+debate-mcp/.venv/Scripts/python.exe debate-mcp/backup.py            # respalda y rota
+debate-mcp/.venv/Scripts/python.exe debate-mcp/backup.py --list     # qué hay guardado
+debate-mcp/.venv/Scripts/python.exe debate-mcp/backup.py --check    # antigüedad del último
 ```
+
+El volcado va comprimido a `debate-mcp/backups/` (1,3 MB con 66 decisiones),
+se **verifica leyéndolo de vuelta** — si no trae las tablas del tablero se
+descarta y el comando falla — y se conservan los últimos 14. En Windows lo
+agenda `bin/schedule-backup.ps1` todos los días a las 9:30; en macOS o Linux,
+una línea de cron:
+
+```cron
+30 9 * * *  /ruta/ClaMi/debate-mcp/.venv/bin/python /ruta/ClaMi/debate-mcp/backup.py
+```
+
+`doctor.py` avisa si el último respaldo tiene más de 48 horas.
+
+### restaurar
+
+Probado el 2026-09-24 sobre una base temporal: **4 segundos** para 66
+decisiones y 584 mensajes, idénticos al original.
+
+```bash
+PG=experiments/pg/pgsql/bin        # Windows; en otros SO, el postgres del PATH
+$PG/createdb.exe -h 127.0.0.1 debate_restore_test
+python -c "import gzip,sys; sys.stdout.write(gzip.open('debate-mcp/backups/debate-AAAAMMDD-HHMMSS.sql.gz','rt',encoding='utf-8').read())" > restore.sql
+$PG/psql.exe -h 127.0.0.1 -d debate_restore_test -q -f restore.sql
+$PG/psql.exe -h 127.0.0.1 -d debate_restore_test -tAc "SELECT count(*) FROM decisions"
+```
+
+Restaurá primero en una base de prueba y compará los conteos; recién después,
+si hace falta, sobre la real, con el relay y la UI detenidos.

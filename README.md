@@ -152,11 +152,16 @@ the last week exceeds 30 % in their current role). On Windows schedule it
 every 15 minutes with a toast on failure:
 `powershell -ExecutionPolicy Bypass -File debate-mcp\bin\schedule-healthcheck.ps1`
 (`-Remove` unregisters; log in `debate-mcp/logs/healthcheck.log`).
-Two more from the same folder: `schedule-magi.ps1` drops a `ClaMi-magi.cmd`
+Three more from the same folder: `schedule-magi.ps1` drops a `ClaMi-magi.cmd`
 into your Startup folder so MAGI starts at logon (after a reboot nothing
-else does), and `schedule-quality.ps1` schedules
-`metrics.py --quality --notify` every Monday at 9:00 with a toast; each
-accepts `-Remove`. Latency, error
+else does), `schedule-backup.ps1` dumps the board daily, and
+`schedule-quality.ps1` schedules `metrics.py --quality --notify` every Monday
+at 9:00 with a toast; each accepts `-Remove`. **The board is the only
+irreplaceable thing here**: `backup.py` writes a compressed, verified
+`pg_dump` to `debate-mcp/backups/` — it re-reads the dump and refuses to keep
+one without the board's tables — keeps the last 14, and is what `doctor.py`
+checks the age of. Restoring 66 decisions took 4 seconds; the procedure is in
+`docs/operacion.md#respaldo`. Latency, error
 and timeout rates per seat and turn type (from `logs/trigger_events.jsonl`):
 `.venv/bin/python metrics.py --days 30` — including approximate tokens per
 turn (prompt, output and memory block, at 4 characters per token; what a
