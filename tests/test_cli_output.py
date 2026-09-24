@@ -61,3 +61,49 @@ def test_flags_por_formato():
     assert cli_output.flags("codex-jsonl") == ["--json"]
     with pytest.raises(ValueError):
         cli_output.flags("marciano")
+
+
+def test_kimi_stream_json_deja_solo_la_respuesta_final():
+    """kimi emite un objeto por línea: banner de versión, llamadas a
+    herramientas sin `content`, resultados de herramienta y, al final, la
+    respuesta. Sin esto el voto arrastraba «kimi version 0.42.0» y el eco."""
+    lines = [
+        {"role": "meta", "type": "system.version", "version": "0.42.0"},
+        {"role": "assistant", "tool_calls": [{"type": "function", "id": "t1",
+                                              "function": {"name": "Read", "arguments": '{"path": "nota.txt"}'}}]},
+        {"role": "tool", "tool_call_id": "t1", "content": "1\tel secreto es 4242"},
+        {"role": "assistant", "content": "El número es 4242.\n\nPOSITION: yes"},
+        {"role": "meta", "type": "session.resume_hint", "session_id": "s1",
+         "content": "To resume this session: kimi -r s1"},
+    ]
+    raw = "\n".join(json.dumps(line) for line in lines) + "\n"
+    parsed = cli_output.parse("kimi-stream-json", raw)
+    assert parsed["text"] == "El número es 4242.\n\nPOSITION: yes"
+    assert "kimi version" not in parsed["text"] and "resume" not in parsed["text"]
+    assert parsed["input_tokens"] is None and parsed["cost_usd"] is None, "kimi no reporta uso"
+    assert parsed["error"] is None
+    assert cli_output.flags("kimi-stream-json") == ["--output-format", "stream-json"]
+
+
+def test_kimi_stream_json_sin_respuesta_devuelve_el_texto_crudo():
+    solo_meta = json.dumps({"role": "meta", "type": "system.version", "version": "0.42.0"})
+    assert cli_output.parse("kimi-stream-json", solo_meta)["text"] == solo_meta, "sin respuesta, no inventes una vacía"
+    roto = cli_output.parse("kimi-stream-json", "kimi murió sin json")
+    assert roto["text"] == "kimi murió sin json"
+    con_error = json.dumps({"role": "error", "content": "quota exceeded"})
+    assert cli_output.parse("kimi-stream-json", con_error)["error"] == "quota exceeded"
+
+
+def test_build_command_pone_los_flags_donde_cada_cli_los_acepta():
+    """kimi toma el valor de `-p` como prompt: un flag entre medio se lee como
+    prompt y el resto como comando («unknown command stream-json»). Por eso
+    sus flags van al final; los de claude y codex, antes del prompt."""
+    assert cli_output.build_command("kimi-stream-json", "kimi", ["-p"], "leé el archivo") == \
+        ["kimi", "-p", "leé el archivo", "--output-format", "stream-json"]
+    assert cli_output.build_command("codex-jsonl", "codex", ["exec", "-m", "x"], "-") == \
+        ["codex", "exec", "-m", "x", "--json", "-"]
+    assert cli_output.build_command("claude-json", "claude", ["-p"], None) == \
+        ["claude", "-p", "--output-format", "json"], "stdin-only: sin argumento de prompt"
+    assert cli_output.build_command(None, "kimi", ["-p"], "hola") == ["kimi", "-p", "hola"]
+    with pytest.raises(ValueError):
+        cli_output.build_command("marciano", "x", [], None)

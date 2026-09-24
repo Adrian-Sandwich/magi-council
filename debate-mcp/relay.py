@@ -822,17 +822,18 @@ def _run_cli_inline(seat_info: dict, prompt: str, cwd: str, timeout: int,
     pout = Path(tmp) / "out.txt"
     pin.write_text(prompt, encoding="utf-8")
     with pin.open("rb") as fin, pout.open("wb") as fout:
-        command = [seat_info["bin"], *seat_info.get("args", []), *cli_output.flags(output_format)]
         transport = seat_info.get('prompt_transport', 'stdin')
         if transport == 'file':
-            command.append(f'Read the UTF-8 task file at {pin} and follow its instructions. '
-                           'Return your final answer using the exact format requested in that file.')
+            prompt_arg = (f'Read the UTF-8 task file at {pin} and follow its instructions. '
+                          'Return your final answer using the exact format requested in that file.')
         elif transport == 'argument':
-            command.append(prompt)
+            prompt_arg = prompt
         elif transport == 'stdin-only':
-            pass  # Claude -p reads stdin without a positional '-' argument.
+            prompt_arg = None  # Claude -p reads stdin without a positional '-' argument.
         else:
-            command.append('-')
+            prompt_arg = '-'
+        command = cli_output.build_command(output_format, seat_info["bin"],
+                                           seat_info.get("args", []), prompt_arg)
         proc = subprocess.Popen(
             command,
             cwd=cwd, stdin=fin, stdout=fout, stderr=subprocess.STDOUT,

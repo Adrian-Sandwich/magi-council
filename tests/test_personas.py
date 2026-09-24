@@ -70,3 +70,74 @@ def test_metrics_por_modo():
     assert m["behavioral"]["positions"]["balthasar"] == {"no": 1}
     text = persona_ab.render({"seat_config": "casper", "decisions": 2, "modes": m})
     assert "behavioral" in text and "100%" in text
+
+
+def test_seat_configs_un_solo_proveedor_o_el_consejo_real(monkeypatch):
+    """Las dos mitades del experimento: con un proveedor en los tres asientos
+    la única variable es la persona; con `--mixed` se suma el proveedor, que
+    es lo que hay que separar. Un asiento API o sin journal inline no sirve:
+    el experimento vota por stdout de un CLI."""
+    import heads
+    registry = {
+        "melchior": {"seat": "melchior", "name": "kimi", "type": "cli", "journal": "inline", "bin": "/k"},
+        "balthasar": {"seat": "balthasar", "name": "codex", "type": "cli", "journal": "inline", "bin": "/c"},
+        "casper": {"seat": "casper", "name": "claude", "type": "cli", "journal": "inline", "bin": "/cl"},
+    }
+    monkeypatch.setattr(heads, "seat_by_name", lambda name: registry.get(name))
+
+    configs, label = persona_ab.seat_configs("casper", mixed=False)
+    assert {s: c["bin"] for s, c in configs.items()} == {s: "/cl" for s in persona_ab.SEATS}
+    assert "claude" in label and "tres asientos" in label
+
+    configs, label = persona_ab.seat_configs(None, mixed=True)
+    assert [configs[s]["bin"] for s in persona_ab.SEATS] == ["/k", "/c", "/cl"]
+    assert label.startswith("mixto:") and "melchior=kimi" in label and "casper=claude" in label
+
+    registry["casper"] = {"seat": "casper", "type": "api", "model": "x", "base_url": "u"}
+    with pytest.raises(SystemExit):
+        persona_ab.seat_configs("casper", mixed=False)
+    with pytest.raises(SystemExit):
+        persona_ab.seat_configs(None, mixed=True)
+
+
+def test_render_dice_que_configuracion_corrio():
+    base = {"decisions": 20, "seat_config": "mixto: melchior=kimi, balthasar=codex, casper=claude",
+            "mixed": True, "modes": {"off": {"votes": 60, "pair_agreement": 0.5, "unanimous_rate": 0.3,
+                                             "axis_recited_rate": 0.1, "argument_diversity": 0.9,
+                                             "positions": {s: {"yes": 20} for s in persona_ab.SEATS}}}}
+    text = persona_ab.render(base)
+    assert "20 decisiones × 1 modos, mixto: melchior=kimi" in text
+    assert "cada asiento con su proveedor" in text
+    solo = persona_ab.render(dict(base, mixed=False, seat_config="casper (claude) en los tres asientos"))
+    assert "mismo modelo en los tres asientos" in solo
+
+
+def test_scratch_config_deja_correr_a_codex_fuera_de_un_repo():
+    """El experimento vota en un tempdir: codex exec aborta ahí con «Not
+    inside a trusted directory» salvo que se le pase --skip-git-repo-check."""
+    codex = {"seat": "balthasar", "name": "codex", "bin": "/c",
+             "args": ["exec", "-m", "gpt-5.6-luna", "--sandbox", "workspace-write"]}
+    config = persona_ab.scratch_config(codex, "melchior")
+    assert config["args"][-1] == "--skip-git-repo-check" and config["seat"] == "melchior"
+    assert codex["args"][-1] == "workspace-write", "no muta la config del registry"
+    assert persona_ab.scratch_config(config, "melchior")["args"].count("--skip-git-repo-check") == 1
+    claude = {"seat": "casper", "bin": "/cl", "args": ["-p", "--model", "opus"]}
+    assert persona_ab.scratch_config(claude, "casper")["args"] == ["-p", "--model", "opus"]
+
+
+def test_pick_decisions_descarta_planes_del_ejecutor_y_sus_revisiones():
+    """Los planes de producción y sus revisiones son tareas mecánicas: las
+    tres cabezas aprueban «agregar type hints» por lo mismo. Contarlas como
+    deliberaciones infla el acuerdo y hunde la diversidad sin que la persona
+    intervenga (la corrida del 2026-09-24 traía 10 de 20 así)."""
+    rows = [
+        {"id": 1, "title": "¿Conviene migrar el esquema a jsonb ahora?", "artifact": "/r", "votes": 3},
+        {"id": 2, "title": "Implementa: agregar type hints a inventario/utils.py", "artifact": "/r", "votes": 3},
+        {"id": 3, "title": "Revisar implementación de #2: agregar type hints", "artifact": "/r", "votes": 3},
+        {"id": 4, "title": "que es la condicion de ser humano?", "artifact": None, "votes": 3},
+        {"id": 5, "title": "Preparar la migración del tablero a otro host", "artifact": "/r",
+         "votes": 3, "production": True},
+    ]
+    assert [r["id"] for r in persona_ab.pick_decisions(rows, 10)] == [1, 4]
+    assert persona_ab.is_execution_plan(rows[1]) and persona_ab.is_execution_plan(rows[4])
+    assert not persona_ab.is_execution_plan(rows[0])

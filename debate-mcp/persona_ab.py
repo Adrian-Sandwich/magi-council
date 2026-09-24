@@ -13,7 +13,14 @@ Mide, por modo: acuerdo de voto por pareja, decisiones unánimes, cuántos
 votos nombran su eje (recitado) y diversidad de argumentos (1 − Jaccard
 medio de vocabulario entre cabezas). Guarda las respuestas crudas en JSON.
 
-    .venv/Scripts/python.exe persona_ab.py --limit 8 --seat casper --jobs 3
+Con `--mixed` corre la otra mitad del experimento: cada asiento con su
+proveedor real (el consejo de todos los días). Comparando las dos corridas
+sobre las MISMAS decisiones se separa lo que aporta la persona de lo que
+aporta el proveedor: en la corrida de un solo modelo la única variable es
+la persona; en la mixta se suma el proveedor.
+
+    .venv/Scripts/python.exe persona_ab.py --limit 20 --seat casper --jobs 3
+    .venv/Scripts/python.exe persona_ab.py --limit 20 --mixed --jobs 3
     .venv/Scripts/python.exe persona_ab.py --report logs/persona_ab.json
 
 No escribe nada en Postgres: lee decisiones y mensajes, vota en el vacío.
@@ -39,6 +46,11 @@ BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_OUT = BASE_DIR / "logs" / "persona_ab.json"
 SEATS = ("melchior", "balthasar", "casper")
 CONTROL = ("seguí", "segui", "retry", "reintent")
+# Un plan de producción y su revisión no son deliberaciones: son tareas
+# mecánicas del ejecutor («Implementa: agregar type hints…»), donde las tres
+# cabezas dicen que sí por lo mismo. Meterlas al experimento infla el acuerdo
+# y hunde la diversidad sin que la persona tenga nada que ver.
+PLAN_PREFIXES = ("implementa:", "revisar implementación de", "revisar implementacion de")
 # Palabras con las que cada cabeza suele recitar su eje/sesgo.
 AXIS_WORDS = {
     "melchior": ("hechos", "verdad técnica", "frialdad", "mi eje", "verifiqué", "verificado"),
@@ -57,12 +69,19 @@ def vocabulary(text: str) -> set[str]:
     return {t for t in re.findall(r"[a-záéíóúñ]{5,}", _normal(text)) if t not in STOP}
 
 
+def is_execution_plan(row: dict) -> bool:
+    """Plan de producción o revisión de uno."""
+    title = (row.get("title") or "").strip().lower()
+    return bool(row.get("production")) or title.startswith(PLAN_PREFIXES)
+
+
 def pick_decisions(rows: list[dict], limit: int) -> list[dict]:
     """Decisiones con tres votos en la ronda 1 y un título con contenido, la
     mitad con artefacto (código) y la mitad sin él (documento/filosofía),
     para que el resultado no dependa del tipo de pregunta."""
     usable = [r for r in rows if r.get("votes") == 3 and len(r.get("title") or "") >= 20
-              and not (r["title"] or "").strip().lower().startswith(CONTROL)]
+              and not (r["title"] or "").strip().lower().startswith(CONTROL)
+              and not is_execution_plan(r)]
     with_repo = [r for r in usable if r.get("artifact")]
     without = [r for r in usable if not r.get("artifact")]
     half = max(1, limit // 2)
@@ -114,7 +133,7 @@ def _count(values):
 
 def render(report: dict) -> str:
     lines = [f"[persona_ab] {report['decisions']} decisiones × {len(report['modes'])} modos, "
-             f"modelo de {report['seat_config']} en los tres asientos"]
+             f"{report['seat_config']}"]
     lines.append(f"  {'modo':<11} {'votos':>5} {'acuerdo':>8} {'unánime':>8} {'recita':>7} {'diversidad':>10}")
     for mode, m in report["modes"].items():
         lines.append(f"  {mode:<11} {m['votes']:>5} {_pct(m['pair_agreement']):>8} {_pct(m['unanimous_rate']):>8} "
@@ -122,7 +141,8 @@ def render(report: dict) -> str:
     for mode, m in report["modes"].items():
         lines.append(f"  {mode}: " + "; ".join(f"{s} {m['positions'][s]}" for s in SEATS))
     lines.append("  (acuerdo = votos iguales por pareja; diversidad = 1 − Jaccard de vocabulario; "
-                 "mismo modelo en los tres asientos, sin herramientas)")
+                 + ("cada asiento con su proveedor" if report.get("mixed") else "mismo modelo en los tres asientos")
+                 + ", sin herramientas)")
     return "\n".join(lines)
 
 
@@ -137,7 +157,7 @@ def _load_decisions(limit: int) -> list[dict]:
     with connect() as conn:
         rows = conn.execute(
             """
-            SELECT d.id, d.title, d.artifact, d.protocol, d.thread,
+            SELECT d.id, d.title, d.artifact, d.protocol, d.thread, d.production,
                    (SELECT count(*) FROM positions p WHERE p.decision_id = d.id AND p.round = 1) AS votes,
                    (SELECT min(p.message_id) FROM positions p WHERE p.decision_id = d.id) AS first_vote
             FROM decisions d ORDER BY d.id
@@ -156,6 +176,34 @@ def _load_decisions(limit: int) -> list[dict]:
     return chosen
 
 
+def seat_configs(seat_name: str | None, mixed: bool) -> tuple[dict, str]:
+    """({asiento: config}, etiqueta). Con `mixed`, cada asiento con su
+    proveedor real; si no, el proveedor de `seat_name` en los tres puestos
+    (la persona queda como única variable)."""
+    def usable(cfg: dict | None, name: str) -> dict:
+        if not cfg or cfg.get("type") == "api" or cfg.get("journal") != "inline":
+            raise SystemExit(f"{name} debe ser un asiento CLI inline de heads.json")
+        return cfg
+
+    if mixed:
+        configs = {seat: usable(heads.seat_by_name(seat), seat) for seat in SEATS}
+        label = "mixto: " + ", ".join(f"{s}={configs[s].get('name', '?')}" for s in SEATS)
+        return configs, label
+    cfg = usable(heads.seat_by_name(seat_name), f"--seat {seat_name!r}")
+    return {seat: cfg for seat in SEATS}, f"{seat_name} ({cfg.get('name', '?')}) en los tres asientos"
+
+
+def scratch_config(seat_cfg: dict, seat: str) -> dict:
+    """El experimento vota en un directorio temporal, no en un repo: codex
+    exec se niega a arrancar fuera de un directorio confiable sin
+    `--skip-git-repo-check` (así murió el primer intento de la corrida
+    mixta, con «Not inside a trusted directory»)."""
+    config = dict(seat_cfg, seat=seat, args=list(seat_cfg.get("args", [])))
+    if "exec" in config["args"] and "--skip-git-repo-check" not in config["args"]:
+        config["args"].append("--skip-git-repo-check")
+    return config
+
+
 def _vote(seat_cfg: dict, seat: str, decision: dict, mode: str, cwd: str) -> dict:
     import relay
     persona = personas.system_prompt(seat, mode)
@@ -164,19 +212,18 @@ def _vote(seat_cfg: dict, seat: str, decision: dict, mode: str, cwd: str) -> dic
     # modo pedido para que las tres condiciones corran en la misma corrida.
     system = system.replace(apihead._persona(seat), persona, 1)
     prompt = f"{system}\n\n{user}"
-    config = dict(seat_cfg, seat=seat)
+    config = scratch_config(seat_cfg, seat)
     text = relay._run_cli_inline(config, prompt, cwd, seat_cfg.get("timeout_secs", 600))
     try:
         vote = apihead.parse_vote(apihead.strip_echo(text, prompt))
-        return {"position": vote["position"], "body": vote["body"]}
+        return {"position": vote["position"], "body": vote["body"], "provider": seat_cfg.get("name")}
     except ValueError as exc:
-        return {"position": None, "body": text, "error": str(exc)}
+        return {"position": None, "body": text, "error": str(exc), "provider": seat_cfg.get("name")}
 
 
-def run(limit: int, seat_name: str, modes: list[str], jobs: int, out: Path, resume: bool = False) -> dict:
-    seat_cfg = heads.seat_by_name(seat_name)
-    if not seat_cfg or seat_cfg.get("type") == "api" or seat_cfg.get("journal") != "inline":
-        raise SystemExit(f"--seat debe ser un asiento CLI inline de heads.json (no {seat_name!r})")
+def run(limit: int, seat_name: str, modes: list[str], jobs: int, out: Path,
+        resume: bool = False, mixed: bool = False) -> dict:
+    configs, label = seat_configs(seat_name, mixed)
     decisions = _load_decisions(limit)
     for d in decisions:
         d["round"] = 1
@@ -193,17 +240,20 @@ def run(limit: int, seat_name: str, modes: list[str], jobs: int, out: Path, resu
         print(f"  reanudando: {len(results)} votos conservados, {len(tasks)} por re-votar", flush=True)
 
     def save():
-        report = {"seat_config": seat_name, "decisions": len(decisions), "modes": metrics(results), "results": results}
+        report = {"seat_config": label, "mixed": mixed, "decisions": len(decisions),
+                  "modes": metrics(results), "results": results}
         out.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
         return report
 
     with tempfile.TemporaryDirectory(prefix="magi-persona-ab-") as cwd, ThreadPoolExecutor(jobs) as pool:
-        futures = {pool.submit(_vote, seat_cfg, seat, d, mode, cwd): (d, mode, seat) for d, mode, seat in tasks}
+        futures = {pool.submit(_vote, configs[seat], seat, d, mode, cwd): (d, mode, seat)
+                   for d, mode, seat in tasks}
         for future, (d, mode, seat) in futures.items():
             try:
                 outcome = future.result()
             except Exception as exc:  # un voto roto no tira 71 votos buenos
-                outcome = {"position": None, "body": "", "error": f"{type(exc).__name__}: {exc}"[:300]}
+                outcome = {"position": None, "body": "", "provider": configs[seat].get("name"),
+                           "error": f"{type(exc).__name__}: {exc}"[:300]}
             results.append({"decision_id": d["id"], "title": d["title"], "artifact": bool(d.get("artifact")),
                             "mode": mode, "seat": seat, **outcome})
             # ASCII a propósito: la consola de Windows (cp1252) no imprime flechas
@@ -222,6 +272,8 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--limit", type=int, default=8, help="decisiones a re-votar (mitad con repo, mitad sin)")
     parser.add_argument("--seat", default="casper", help="asiento de heads.json cuyo proveedor ocupa los tres puestos")
+    parser.add_argument("--mixed", action="store_true",
+                        help="cada asiento con su proveedor real (mide persona + proveedor)")
     parser.add_argument("--modes", default=",".join(personas.MODES))
     parser.add_argument("--jobs", type=int, default=3)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
@@ -234,7 +286,7 @@ def main(argv=None) -> int:
         print(render(data))
         return 0
     modes = [m for m in args.modes.split(",") if m in personas.MODES]
-    report = run(args.limit, args.seat, modes, args.jobs, args.out, resume=args.resume)
+    report = run(args.limit, args.seat, modes, args.jobs, args.out, resume=args.resume, mixed=args.mixed)
     print(render(report))
     print(f"  respuestas crudas en {args.out}")
     return 0
