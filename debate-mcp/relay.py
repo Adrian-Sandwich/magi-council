@@ -178,10 +178,25 @@ def _token(thread: str, seat: str | None = None) -> str:
 # ---------------------------------------------------------------- estado
 
 def load_state() -> dict:
+    """El estado es una caché (hasta dónde se leyó, cuántos disparos lleva
+    cada thread): perderlo cuesta unos disparos repetidos, no arrancar
+    cuesta el consejo entero. El apagón sucio del 2026-09-24 dejó este
+    archivo en puros bytes nulos y el relay no levantó más, en silencio."""
+    state = {}
     if STATE_PATH.exists():
-        state = json.loads(STATE_PATH.read_text(encoding="utf-8"))
-    else:
-        state = {}
+        try:
+            state = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+            if not isinstance(state, dict):
+                raise ValueError(f"el estado no es un objeto sino {type(state).__name__}")
+        except (ValueError, OSError, UnicodeDecodeError) as exc:
+            broken = STATE_PATH.with_suffix(f".json.roto-{datetime.now():%Y%m%dT%H%M%S}")
+            try:
+                STATE_PATH.replace(broken)
+            except OSError:
+                broken = None
+            log.error("estado ilegible (%s); arranco de cero%s", exc,
+                      f" y lo guardo en {broken.name}" if broken else "")
+            state = {}
     state.setdefault("last_id", 0)
     state.setdefault("threads", {})
     state.setdefault("pending", [])
@@ -189,10 +204,37 @@ def load_state() -> dict:
     return state
 
 
+def catch_up(conn, state: dict) -> int:
+    """Un relay sin marcador NO relee la historia: se pone al día con el
+    último mensaje y escucha desde ahí. Sin esto, perder el estado (el
+    apagón del 2026-09-24) hacía que el relay tomara 639 mensajes viejos
+    como nuevos y se pusiera a contestar conversaciones cerradas hace
+    días, quemando turnos. Devuelve cuántos mensajes se saltó."""
+    if state["last_id"]:
+        return 0
+    row = conn.execute("SELECT coalesce(max(id), 0) AS last FROM messages").fetchone()
+    state["last_id"] = row["last"]
+    if state["last_id"]:
+        log.warning("sin marcador previo: arranco desde el mensaje %s sin releer la historia",
+                    state["last_id"])
+    return state["last_id"]
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    """Escritura que sobrevive a un corte: al archivo temporal se le hace
+    flush y fsync ANTES de reemplazar. Sin el fsync, Windows puede dejar el
+    tamaño reservado y el contenido sin bajar a disco — así quedaron el
+    estado del relay y tres archivos de codex el 2026-09-24: puros ceros."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    tmp.replace(path)
+
+
 def save_state(state: dict) -> None:
-    tmp = STATE_PATH.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(state, indent=1))
-    tmp.replace(STATE_PATH)
+    _write_atomic(STATE_PATH, json.dumps(state, indent=1))
 
 
 def thread_state(state: dict, thread: str) -> dict:
@@ -248,7 +290,7 @@ def write_heartbeat(state: dict, pg_ok: bool) -> None:
     with _inflight_lock:
         inflight = sorted(_inflight)
         activity = [dict(_activity[t]) for t in inflight if t in _activity]
-    HEARTBEAT_PATH.write_text(json.dumps({
+    _write_atomic(HEARTBEAT_PATH, json.dumps({
         "ts": now_iso(),
         "pid": os.getpid(),
         "pg_ok": pg_ok,
@@ -1435,6 +1477,7 @@ def main() -> None:
             with connect() as conn:
                 conn.execute(f"LISTEN {CHANNEL_ALL}")
                 conn.execute(f"LISTEN {CHANNEL_DECISIONS}")
+                catch_up(conn, state)
                 log.info("escuchando %s y %s (last_id=%s)", CHANNEL_ALL, CHANNEL_DECISIONS, state["last_id"])
                 backoff = 1
                 while True:

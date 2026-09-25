@@ -1401,3 +1401,59 @@ def test_decode_cli_output_quita_bytes_nul():
     text = relay._decode_cli_output(raw)
     assert "\x00" not in text
     assert text.endswith("POSITION: conditional\nCONDITIONS: nada\n") and "ó" in text
+
+
+def test_estado_corrupto_no_impide_arrancar(tmp_path, monkeypatch):
+    """El apagón del 2026-09-24 dejó relay_state.json en puros bytes nulos y
+    el relay no volvió a levantar: json.loads explotaba en el arranque. El
+    estado es una caché; perderlo cuesta unos disparos repetidos."""
+    path = tmp_path / "relay_state.json"
+    path.write_bytes(b"\x00" * 64)
+    monkeypatch.setattr(relay, "STATE_PATH", path)
+    state = relay.load_state()
+    assert state == {"last_id": 0, "threads": {}, "pending": [], "spawn_failures": {}}
+    apartados = list(tmp_path.glob("relay_state.json.roto-*"))
+    assert len(apartados) == 1 and apartados[0].read_bytes() == b"\x00" * 64
+    assert not path.exists(), "el archivo roto se aparta, no se deja en el camino"
+
+    path.write_text('["una lista, no un objeto"]', encoding="utf-8")
+    assert relay.load_state()["threads"] == {}
+    assert len(list(tmp_path.glob("relay_state.json.roto-*"))) >= 1
+
+
+def test_el_estado_se_guarda_con_fsync_y_de_forma_atomica(tmp_path, monkeypatch):
+    """Sin fsync, Windows deja el tamaño reservado y el contenido sin bajar a
+    disco: eso es exactamente lo que produjo el archivo de ceros."""
+    path = tmp_path / "relay_state.json"
+    monkeypatch.setattr(relay, "STATE_PATH", path)
+    sincronizados = []
+    real_fsync = relay.os.fsync
+    monkeypatch.setattr(relay.os, "fsync", lambda fd: sincronizados.append(fd) or real_fsync(fd))
+    relay.save_state({"last_id": 7, "threads": {}, "pending": [], "spawn_failures": {}})
+    assert json.loads(path.read_text(encoding="utf-8"))["last_id"] == 7
+    assert sincronizados, "se sincronizó a disco antes de reemplazar"
+    assert not list(tmp_path.glob("*.tmp")), "sin temporales sueltos"
+    assert relay.load_state()["last_id"] == 7
+
+
+def test_un_relay_sin_marcador_no_relee_la_historia():
+    """El 2026-09-24 el relay perdió su estado, arrancó en last_id=0, tomó 639
+    mensajes viejos como nuevos y se puso a contestar una conversación de
+    hacía días. Sin marcador se arranca desde el último mensaje."""
+    class Conn:
+        def __init__(self, last): self.last = last
+        def execute(self, query, params=()):
+            assert "max(id)" in query, query
+            return self
+        def fetchone(self): return {"last": self.last}
+
+    state = {"last_id": 0, "threads": {}, "pending": [], "spawn_failures": {}}
+    assert relay.catch_up(Conn(639), state) == 639
+    assert state["last_id"] == 639, "escucha desde ahora, no desde el principio"
+
+    # con marcador propio no se toca nada
+    state = {"last_id": 100, "threads": {}, "pending": [], "spawn_failures": {}}
+    assert relay.catch_up(Conn(639), state) == 0 and state["last_id"] == 100
+    # base vacía (instalación nueva): sigue en cero y no avisa de nada raro
+    state = {"last_id": 0, "threads": {}, "pending": [], "spawn_failures": {}}
+    assert relay.catch_up(Conn(0), state) == 0 and state["last_id"] == 0

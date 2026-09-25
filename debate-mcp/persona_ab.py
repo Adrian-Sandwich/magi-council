@@ -150,6 +150,21 @@ def _pct(v) -> str:
     return "-" if v is None else f"{v * 100:.0f}%"
 
 
+def compare(reports: list[tuple[str, dict]]) -> str:
+    """Tabla markdown de varias corridas, modo por modo. Es la comparación que
+    separa persona de proveedor: en una corrida de un solo modelo la única
+    variable es la persona; en la mixta se suma el proveedor, y la diferencia
+    entre ambas es lo que aporta tener tres modelos distintos."""
+    lines = ["| corrida | modo | votos | acuerdo | unánime | recita | diversidad |",
+             "|---|---|---|---|---|---|---|"]
+    for label, report in reports:
+        for mode, m in report["modes"].items():
+            lines.append(f"| {label} | {mode} | {m['votes']} | {_pct(m['pair_agreement'])} | "
+                         f"{_pct(m['unanimous_rate'])} | {_pct(m['axis_recited_rate'])} | "
+                         f"{_pct(m['argument_diversity'])} |")
+    return '\n'.join(lines)
+
+
 # ------------------------------------------------------------------ corrida
 
 def _load_decisions(limit: int) -> list[dict]:
@@ -278,8 +293,18 @@ def main(argv=None) -> int:
     parser.add_argument("--jobs", type=int, default=3)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--report", type=Path, help="sólo imprimir el informe de un JSON ya generado")
+    parser.add_argument("--compare", nargs="+", metavar="JSON",
+                        help="tabla markdown comparando varias corridas ya generadas")
     parser.add_argument("--resume", action="store_true", help="re-votar sólo lo que quedó sin voto en --out")
     args = parser.parse_args(argv)
+    if args.compare:
+        reports = []
+        for path in args.compare:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            data["modes"] = metrics(data["results"])
+            reports.append((data.get("seat_config", Path(path).stem), data))
+        print(compare(reports))
+        return 0
     if args.report:
         data = json.loads(args.report.read_text(encoding="utf-8"))
         data["modes"] = metrics(data["results"])

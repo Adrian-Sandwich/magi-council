@@ -141,3 +141,19 @@ def test_pick_decisions_descarta_planes_del_ejecutor_y_sus_revisiones():
     assert [r["id"] for r in persona_ab.pick_decisions(rows, 10)] == [1, 4]
     assert persona_ab.is_execution_plan(rows[1]) and persona_ab.is_execution_plan(rows[4])
     assert not persona_ab.is_execution_plan(rows[0])
+
+
+def test_compare_arma_la_tabla_de_varias_corridas():
+    """La comparación entre corridas es lo que separa persona de proveedor:
+    con un solo modelo la única variable es la persona; con los tres, se suma
+    el proveedor."""
+    def report(votes, diversity):
+        return {"modes": {"off": {"votes": votes, "pair_agreement": 0.5, "unanimous_rate": 0.25,
+                                  "axis_recited_rate": 0.1, "argument_diversity": diversity,
+                                  "positions": {}}}}
+    tabla = persona_ab.compare([("codex en los tres asientos", report(60, 0.80)),
+                                ("mixto", report(57, 0.93))])
+    filas = tabla.splitlines()
+    assert filas[0].startswith("| corrida |") and filas[1].count("---") == 7
+    assert "| codex en los tres asientos | off | 60 | 50% | 25% | 10% | 80% |" in tabla
+    assert "| mixto | off | 57 | 50% | 25% | 10% | 93% |" in tabla
